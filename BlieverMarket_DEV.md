@@ -21,16 +21,16 @@
 
 ```
 Initializable
-    └── ReentrancyGuardUpgradeable
+    └── ReentrancyGuardTransient
             └── PausableUpgradeable
                     └── BlieverMarket
 ```
 
 - **`Initializable`**: Provides `initializer` modifier and `_disableInitializers()`. Used because EIP-1167 clones cannot use constructors.
-- **`ReentrancyGuardUpgradeable`**: Provides `nonReentrant` modifier. Applied to `buy()`, `sell()`, `claim()` — any function that makes external calls after state changes.
+- **`ReentrancyGuardTransient`**: Provides `nonReentrant` modifier via EIP-1153 transient storage. Applied to `buy()`, `sell()`, `claim()` — any function that makes external calls after state changes. Because transient storage resets automatically at the end of every transaction, no storage slot is consumed and no initialiser call is required. Saves ~2,000 gas per guarded call compared to a persistent-storage guard.
 - **`PausableUpgradeable`**: Provides `whenNotPaused` modifier. Applied to `buy()` and `sell()` only — resolution and claims are never paused.
 
-> **Note:** These are OZ upgradeable versions for storage compatibility with the EIP-1167 proxy pattern. The market itself is NOT UUPS-upgradeable — there is no `_authorizeUpgrade()`.
+> **Note:** `ReentrancyGuardTransient` is from the standard (non-upgradeable) OZ library; it carries no storage slots, so it is fully compatible with the EIP-1167 clone pattern without requiring a namespaced storage slot. `PausableUpgradeable` uses OZ's EIP-7201 namespaced storage. The market itself is NOT UUPS-upgradeable — there is no `_authorizeUpgrade()`.
 
 ---
 
@@ -38,14 +38,14 @@ Initializable
 
 **Critical:** The storage layout of `BlieverMarket` must **never be reordered**. Every deployed clone shares this layout via `DELEGATECALL`. Changing variable order breaks all existing markets.
 
-OpenZeppelin upgradeable contracts occupy storage slots 0–N internally. `BlieverMarket`'s own variables start after OZ's storage. The `__gap[45]` at the end reserves future slots.
+`ReentrancyGuardTransient` uses EIP-1153 transient storage — it occupies **zero persistent storage slots**. `PausableUpgradeable` uses OZ's EIP-7201 namespaced storage (a keccak256-derived slot, not a sequential slot). As a result, `BlieverMarket`'s own variables occupy sequential slots starting at slot 0.
 
 ```solidity
-// ── OZ Upgradeable Internal Storage (managed by OZ) ───────────
-// Slot 0: ReentrancyGuard._status (uint256)
-// Slot 1: Pausable._paused (bool, packed)
+// ── OZ Upgradeable Internal Storage (managed by OZ, EIP-7201 namespaced) ──
+// PausableUpgradeable._paused stored at keccak256("openzeppelin.storage.Pausable") − 1
+// ReentrancyGuardTransient: NO persistent storage — transient storage only (EIP-1153)
 
-// ── BlieverMarket Variables ────────────────────────────────────
+// ── BlieverMarket Variables (sequential, start at slot 0) ─────
 // Packed Slot A: pool (20B) + outcomeCount (1B) + resolved (1B) + winningOutcome (1B) = 23B
 address pool;               // 20 bytes
 uint8   outcomeCount;       // 1 byte  [2–100]
@@ -74,11 +74,9 @@ uint256 alpha;
 // Mapping Slots: _shares[addr][idx]
 // Mapping Slots: _totalTraderShares[idx]
 // Mapping Slots: _claimed[addr]
-
-// __gap: uint256[45] — future expansion
 ```
 
-**Invariant check:** If you add a new state variable, append it before `__gap` and decrease `__gap` length by 1. Never insert between existing variables.
+**Invariant check:** When adding a new state variable, append it after `alpha` (before the dynamic arrays). Never insert between existing variables. Clones are immutable once deployed — new variables take effect only in clones deployed from an updated master.
 
 ---
 
@@ -339,7 +337,7 @@ resolve(uint8 _winningOutcome)
 ```
 
 **Why is resolution NOT `nonReentrant`?**  
-`resolve()` is called by the trusted `resolver` address (the Resolution Adapter), which is set immutably at initialization. The pool's `settleMarket()` is already `nonReentrant` on the pool side. Adding `nonReentrant` here would waste ~2,100 gas for a trusted caller scenario. The CEI pattern is still followed (effects before interaction).
+`resolve()` is called by the trusted `resolver` address (the Resolution Adapter), which is set immutably at initialization. The pool's `settleMarket()` is already `nonReentrant` on the pool side. Adding `nonReentrant` here would consume a transient storage write/read for a trusted caller scenario where re-entry is not a realistic attack vector. The CEI pattern is still followed (effects before interaction).
 
 **Why is resolution NOT `whenNotPaused`?**  
 Pausing the market should never block resolution. Even if the factory pauses trading during an oracle dispute, the market must be settleable once the oracle finalises. This mirrors `BlieverV1Pool.settleMarket()` which is also not pause-gated.
@@ -373,7 +371,7 @@ claim()
             emit MarketFullyClaimed(...)
 ```
 
-**Reentrancy note:** The `_claimed[caller] = true` SSTORE happens before the pool call. Even if the caller's `receive()` function re-enters `claim()`, `_claimed[caller]` is already `true`, causing a `AlreadyClaimed` revert. Belt-and-suspenders: `nonReentrant` also blocks via the OZ guard.
+**Reentrancy note:** The `_claimed[caller] = true` SSTORE happens before the pool call. Even if the caller's `receive()` function re-enters `claim()`, `_claimed[caller]` is already `true`, causing an `AlreadyClaimed` revert. Belt-and-suspenders: `nonReentrant` (via `ReentrancyGuardTransient`) also blocks re-entry via transient storage — the guard flag is set on the first entry and cleared at the end of the top-level call, so any nested re-entry reverts immediately.
 
 **`payoutUsdc == 0` check:** If a trader holds fewer than `SHARE_TO_USDC` (1e12) shares of the winning outcome, `_floorToUsdc` rounds to 0. The pool's `claimWinnings` would revert on `ZeroAmount`. We catch this early with a more descriptive `PayoutBelowMinimum` error. These tiny positions (< $0.000001 USDC) are economically negligible.
 
