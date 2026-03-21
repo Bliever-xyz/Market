@@ -83,8 +83,9 @@ uint256 alpha;
 ## 4. Constants
 
 ```solidity
-uint256 internal constant SHARE_TO_USDC = 1e12;  // 10^(18−6)
-uint256 internal constant MATH_SCALE    = 1e18;   // matches LSMath.SCALE
+uint256 internal constant SHARE_TO_USDC    = 1e12;  // 10^(18−6)
+uint256 internal constant MATH_SCALE       = 1e18;   // matches LSMath.SCALE
+uint256 internal constant MIN_SHARE_AMOUNT = 1e15;   // 0.001 shares minimum (dust guard)
 ```
 
 **SHARE_TO_USDC usage:**
@@ -94,6 +95,9 @@ uint256 internal constant MATH_SCALE    = 1e18;   // matches LSMath.SCALE
 | Sell refund → USDC | **Floor** (`_floorToUsdc`) | Vault pays out at most refund; dust stays in LP |
 | Liability → USDC | **Floor** (`_floorToUsdc`) | Conservative: understates liability slightly |
 | Claim payout → USDC | **Floor** (`_floorToUsdc`) | Sum of all payouts = settledPayout (epsilon excluded) |
+
+**MIN_SHARE_AMOUNT rationale:**  
+`buy()` and `sell()` both enforce `shareAmount >= MIN_SHARE_AMOUNT` (1e15, i.e. 0.001 shares in 18-dec). This prevents dust positions that would consume an SSTORE and emit an event for an economically negligible amount. At `MIN_SHARE_AMOUNT` the minimum meaningful on-chain position corresponds to a cost of approximately 0.001 USDC — a practical lower bound on Base L2 where gas costs are cheap enough to make sub-wei spam viable without this guard.
 
 ---
 
@@ -161,22 +165,20 @@ _initialQuantities = initQ;
 ## 7. `buy()` — Function Flow
 
 ```
-buy(outcomeIndex, shareAmount, maxCostUsdc)
+buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 │
 ├── MODIFIERS: nonReentrant, whenNotPaused, tradingOpen
 │
 ├── CHECKS
-│   ├── shareAmount > 0
+│   ├── shareAmount >= MIN_SHARE_AMOUNT (1e15)  — dust guard
 │   └── outcomeIndex < outcomeCount
 │
-├── LOAD STATE
+├── LOAD STATE (single combined loop)
 │   ├── n = outcomeCount (cache: avoid repeated SLOAD)
 │   ├── _alpha = alpha (cache)
-│   ├── qOld = _loadQuantities(n) [n SLOADs]
-│   └── qNew = _copyArray(qOld, n)
-│
-├── BUILD q_new
-│   └── qNew[outcomeIndex] += shareAmount
+│   └── (qOld, qNew) = _loadQuantitiesForBuy(n, outcomeIndex, shareAmount)
+│       └── One pass: reads all n SLOADs, builds qOld and qNew simultaneously
+│           with qNew[outcomeIndex] = qOld[outcomeIndex] + shareAmount
 │
 ├── MATH
 │   ├── tradeCost18 = LSMath.calculateTradeCost(qOld, qNew, _alpha) [int256]
@@ -189,21 +191,28 @@ buy(outcomeIndex, shareAmount, maxCostUsdc)
 ├── SLIPPAGE CHECK
 │   └── if costUsdc > maxCostUsdc: revert SlippageExceeded
 │
+├── OPTIONAL PERMIT (v != 0 only)
+│   ├── try IERC20Permit(usdc).permit(msg.sender, pool, maxCostUsdc, deadline, v, r, s)
+│   └── catch: if allowance(msg.sender, pool) < maxCostUsdc → revert InsufficientPermitAllowance
+│       └── Silent fallback on consumed nonce — front-run griefing does not brick the trade
+│
 ├── EFFECTS (before external call — CEI)
-│   ├── _storeQuantities(qNew, n) [n SSTOREs]
+│   ├── _quantities[outcomeIndex] += shareAmount  [1 SSTORE — single slot only]
 │   ├── _shares[msg.sender][outcomeIndex] += shareAmount [1 SLOAD + 1 SSTORE]
 │   └── _totalTraderShares[outcomeIndex] += shareAmount  [1 SLOAD + 1 SSTORE]
 │
 └── INTERACTION
     └── IBlieverV1Pool(pool).collectTradeCost(msg.sender, costUsdc, newLiabilityUsdc)
         └── Pool: IERC20(usdc).safeTransferFrom(trader, pool, costUsdc)
-            ⚠️  Trader must have approved pool (not this contract) for ≥ maxCostUsdc USDC
+            ⚠️  Trader must have approved pool (not this contract) for ≥ maxCostUsdc USDC,
+                OR supply a valid EIP-2612 permit signature via v/r/s/deadline.
+                Pass v=0/r=0/s=0/deadline=0 to skip permit and rely on pre-existing approval.
 ```
 
-**Gas profile estimate** (n=2 outcomes): ~90,000–120,000 gas on Base  
-- 2 `_loadQuantities` calls: 2 × 2 cold SLOADs = ~4,200 gas  
+**Gas profile estimate** (n=2 outcomes): ~85,000–115,000 gas on Base  
+- `_loadQuantitiesForBuy`: 2 cold SLOADs (one combined loop, no copy pass) = ~4,200 gas  
 - `costFunction` ×2 inside `calculateTradeCost`: dominant cost  
-- 2 `_storeQuantities`: 2 warm SSTOREs (~5,000 gas)  
+- 1 SSTORE to `_quantities[outcomeIndex]` (warm) = ~100 gas vs. n×SSTORE previously  
 - 1 `collectTradeCost` external call + `safeTransferFrom` USDC: ~25,000 gas  
 
 ---
@@ -218,7 +227,7 @@ sell(outcomeIndex, shareAmount, minRefundUsdc)
 ├── MODIFIERS: nonReentrant, whenNotPaused, tradingOpen
 │
 ├── CHECKS
-│   ├── shareAmount > 0
+│   ├── shareAmount >= MIN_SHARE_AMOUNT (1e15)  — dust guard
 │   └── outcomeIndex < outcomeCount
 │
 ├── LOAD STATE
@@ -433,7 +442,25 @@ function _loadQuantities(uint256 n) internal view returns (uint256[] memory q) {
     }
 }
 ```
-Always called at the **start** of trade functions to snapshot current state into memory.
+Called at the start of `sell()` to snapshot the current quantity vector into memory. Also used by view functions (`getQuantities`, `getMarketStatus`). Not used by `buy()` — the latter uses `_loadQuantitiesForBuy` instead.
+
+### `_loadQuantitiesForBuy(n, idx, delta)`
+```solidity
+function _loadQuantitiesForBuy(uint256 n, uint256 idx, uint256 delta)
+    internal view
+    returns (uint256[] memory qOld, uint256[] memory qNew)
+{
+    qOld = new uint256[](n);
+    qNew = new uint256[](n);
+    for (uint256 i = 0; i < n;) {
+        uint256 q = _quantities[i];
+        qOld[i] = q;
+        qNew[i] = (i == idx) ? q + delta : q;
+        unchecked { ++i; }
+    }
+}
+```
+Reads all n storage slots once and simultaneously builds both `qOld` (unmodified snapshot) and `qNew` (with `qNew[idx] += delta`). Replaces the pattern of `_loadQuantities(n)` followed by `_copyArray(qOld, n)` — two full memory passes reduced to one. Called exclusively by `buy()`.
 
 ### `_loadTraderShares(trader, n)`
 ```solidity
@@ -445,7 +472,7 @@ function _loadTraderShares(address trader, uint256 n) internal view returns (uin
     }
 }
 ```
-Used in `sell()` to know trader's full position vector before CSS computation.
+Used in `sell()` to know the trader's full position vector before CSS computation.
 
 ### `_storeQuantities(qNew, n)`
 ```solidity
@@ -456,7 +483,7 @@ function _storeQuantities(uint256[] memory qNew, uint256 n) internal {
     }
 }
 ```
-Always called **after** all checks and math (CEI compliance) and **before** external calls.
+Writes the full mutated quantity vector back to storage. Called by `sell()` (CEI-compliant, before external call). Not called by `buy()` — buys write only the single changed slot directly (`_quantities[outcomeIndex] += shareAmount`).
 
 ### `_floorToUsdc(amount18)` / `_ceilToUsdc(amount18)`
 ```solidity
@@ -480,7 +507,7 @@ function _copyArray(uint256[] memory src, uint256 n) internal pure returns (uint
     }
 }
 ```
-Deep copy of a memory array. Necessary because Solidity memory arrays are passed by reference; modifying `qNew` in-place without a copy would corrupt `qOld` (needed for the `calculateTradeCost` call).
+Deep copy of a memory array. Used by `sell()` to build `qNew` from `qOld` before CSS mutation — necessary because Solidity memory arrays are passed by reference; modifying `qNew` in-place without a copy would corrupt `qOld` (needed for the `calculateTradeCost` call).
 
 ---
 
@@ -491,7 +518,7 @@ Deep copy of a memory array. Necessary because Solidity memory arrays are passed
 | `NotResolver()` | `msg.sender != resolver` in `resolve()` |
 | `NotFactory()` | `msg.sender != factory` in `pause()`, `unpause()`, `expireUnresolved()` |
 | `ZeroAddress()` | Zero address in `initialize()` parameters |
-| `ZeroAmount()` | `shareAmount == 0` in `buy()` or `sell()` |
+| `ZeroAmount()` | Reserved — no longer used in trading path (see `ShareAmountTooSmall`) |
 | `ZeroEpsilon()` | `_epsilon == 0` in `initialize()` |
 | `InvalidOutcomeIndex(index, max)` | `outcomeIndex >= outcomeCount` |
 | `InvalidOutcomeCount(count)` | `_nOutcomes < 2` or `> 100` in `initialize()` |
@@ -503,11 +530,13 @@ Deep copy of a memory array. Necessary because Solidity memory arrays are passed
 | `AlreadyClaimed()` | `claim()` called by same address twice |
 | `NoWinningShares()` | Caller has 0 shares of the winning outcome |
 | `PayoutBelowMinimum()` | `payoutUsdc == 0` (shares < 1 USDC-wei) |
+| `ShareAmountTooSmall(amount, minimum)` | `shareAmount < MIN_SHARE_AMOUNT` in `buy()` or `sell()` |
 | `SlippageExceeded(actual, limit)` | Cost > `maxCostUsdc` (buy) or refund < `minRefundUsdc` (sell) |
 | `ResolutionDeadlinePassed()` | `resolve()` called after `resolutionDeadline` |
 | `ResolutionDeadlineNotPassed()` | `expireUnresolved()` called before deadline passes |
 | `InsufficientMarketQuantity()` | `qOld[outcomeIndex] < netReduce` (should never trigger if ledger invariant holds) |
 | `NegativeBuyCost()` | `calculateTradeCost` returned negative for a buy (LSMath bug — should never happen) |
+| `InsufficientPermitAllowance()` | Permit signature was consumed (front-run) and existing allowance is below `maxCostUsdc` |
 
 ---
 
@@ -533,6 +562,14 @@ These should hold after every state transition:
 **Problem:** `buy()` reverts with `SlippageExceeded`.  
 **Cause:** Another trade changed the q-vector between the UI quote and the on-chain execution.  
 **Fix:** Increase `maxCostUsdc` by 1–5% for slippage tolerance, or re-quote immediately before submitting.
+
+**Problem:** `buy()` or `sell()` reverts with `ShareAmountTooSmall`.  
+**Cause:** `shareAmount` is below `MIN_SHARE_AMOUNT` (1e15). The position is economically negligible and is rejected to prevent state pollution.  
+**Fix:** Enforce `shareAmount >= 1e15` in the frontend before submitting. For context, 1e15 = 0.001 shares = approximately $0.001 USDC at a 50% price.
+
+**Problem:** `buy()` reverts with `InsufficientPermitAllowance`.  
+**Cause:** A permit signature was supplied (`v != 0`), but the nonce was already consumed — most likely by a front-running bot that extracted the permit from the mempool. The fallback allowance check found the trader's allowance for the pool is below `maxCostUsdc`.  
+**Fix (immediate):** Re-submit with `v=0, r=0, s=0, deadline=0` and a prior `USDC.approve(pool, amount)` call. The permit path is optional and does not need to be retried. **Fix (long-term):** Frontend should use `deadline` values close to the current block timestamp to limit the griefing window.
 
 **Problem:** `sell()` reverts with `TradingClosed`.  
 **Cause:** Either `block.timestamp > tradingDeadline` or `resolved == true`.  

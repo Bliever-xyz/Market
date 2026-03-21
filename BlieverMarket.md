@@ -245,11 +245,13 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
                      BUY TRADE
                      ─────────
   Trader ──USDC──▶  BlieverV1Pool
-    │   (safeTransferFrom, approved by trader)
+    │   (safeTransferFrom, approved by trader — via direct approve OR EIP-2612 permit)
     │
     └── BlieverMarket (no USDC touched)
-          │  collectTradeCost(trader, cost, newLiability)
-          └──────────────────────────────────────────────▶ Pool executes transfer
+          │  1. Optional: IERC20Permit(usdc).permit(trader, pool, amount, deadline, v,r,s)
+          │     └─ Falls back silently to existing allowance if nonce consumed
+          │  2. collectTradeCost(trader, cost, newLiability)
+          └──────────────────────────────────────────────▶ Pool executes safeTransferFrom
 
                      SELL TRADE (refund)
                      ──────────────────
@@ -284,6 +286,8 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 | **Immutable rules** | No UUPS upgrade. Factory can only pause/expire — cannot change math or resolver. |
 | **Pause asymmetry** | Trading pauses do NOT block `resolve()` or `claim()`. Markets always settle. |
 | **Vault protection** | Buy costs round UP (ceil). Refunds round DOWN (floor). Liability uses floor. All vault-protective. |
+| **Dust prevention** | `buy()` and `sell()` enforce `shareAmount ≥ MIN_SHARE_AMOUNT` (1e15). Prevents state pollution and event spam from sub-economical positions on cheap L2 gas. |
+| **Permit griefing resistance** | `buy()` accepts an optional EIP-2612 permit. If the signature is consumed by a front-runner, the call falls back to any pre-existing allowance rather than reverting. A trade is never bricked by a consumed nonce. |
 
 ---
 
@@ -328,11 +332,14 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 
 ## 10. Gas Architecture Notes
 
-- **Memory caching:** The q-vector is loaded from storage into memory once per transaction (at the top of `buy()`/`sell()`), processed entirely in memory, then written back in a single loop. This minimises cold SLOAD operations.
+- **Single-slot buy write:** `buy()` writes only `_quantities[outcomeIndex]` — the single slot that changed. The previous `_storeQuantities(qNew, n)` loop (n SSTOREs) is eliminated. For a 10-outcome market this removes 9 unnecessary warm SSTOREs (~900 gas) per buy.
+- **Combined load-and-build for buys:** `_loadQuantitiesForBuy(n, idx, delta)` reads all n quantity slots and simultaneously populates both `qOld` and `qNew` in one loop, replacing the former two-pass pattern (`_loadQuantities` then `_copyArray`). Memory traversal is halved on the buy path.
+- **Memory caching for sells:** The q-vector is loaded from storage into memory once at the top of `sell()`, processed entirely in memory via `_copyArray` and CSS mutation, then written back in a single `_storeQuantities` loop. Sell complexity requires the full write-back; the single-slot optimisation applies only to buys.
 - **Packed storage slots:** The most frequently accessed variables (`pool`, `outcomeCount`, `resolved`, `winningOutcome`) share a single 32-byte slot, yielding a single SLOAD per trade for all four reads.
 - **`unchecked` increments:** Loop counters in `buy()`, `sell()`, and all internal helpers use `unchecked { ++i; }` since overflow at uint256 range is impossible for `outcomeCount ≤ 100`.
 - **No ERC-20 balance queries:** All USDC transfers are delegated to the pool; no `balanceOf` calls in the hot trading path.
 - **Library inlining:** `LSMath` is a `library` with `internal` functions. All math is inlined by the Solidity compiler with no cross-contract call overhead.
+- **Permit lazy-fetch:** When a permit signature is supplied, `IBlieverV1Pool(pool).asset()` is called once to retrieve the USDC address for the `IERC20Permit` call. This is outside the hot path (permit is optional) and the address is not stored redundantly in market state.
 
 ---
 
