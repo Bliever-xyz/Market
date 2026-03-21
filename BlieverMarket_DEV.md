@@ -68,6 +68,9 @@ bytes32 questionId;
 // Slot E: alpha (32 bytes)
 uint256 alpha;
 
+// Slot F: usdc (20 bytes, padded)
+address usdc;
+
 // Dynamic Array Slots: _quantities (length + data)
 // Dynamic Array Slots: _initialQuantities (length + data)
 
@@ -76,7 +79,7 @@ uint256 alpha;
 // Mapping Slots: _claimed[addr]
 ```
 
-**Invariant check:** When adding a new state variable, append it after `alpha` (before the dynamic arrays). Never insert between existing variables. Clones are immutable once deployed — new variables take effect only in clones deployed from an updated master.
+**Invariant check:** When adding a new state variable, append it after `usdc` (before the dynamic arrays). Never insert between existing variables. Clones are immutable once deployed — new variables take effect only in clones deployed from an updated master.
 
 ---
 
@@ -160,6 +163,8 @@ _initialQuantities = initQ;
 
 `_quantities` is mutated by every trade. `_initialQuantities` is **never mutated after initialization** — it is the reference q⁰ used for `LSMath.calculateWorstCaseLoss()` throughout the market's lifetime.
 
+Additionally, `initialize()` calls `IBlieverV1Pool(_pool).asset()` exactly once and stores the result in the `usdc` slot. This is the only point in the contract's lifetime where the USDC address is fetched externally — subsequent reads in `buy()` (permit path) and `usdcToken()` read the cached slot with a single warm SLOAD.
+
 ---
 
 ## 7. `buy()` — Function Flow
@@ -191,15 +196,16 @@ buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 ├── SLIPPAGE CHECK
 │   └── if costUsdc > maxCostUsdc: revert SlippageExceeded
 │
-├── OPTIONAL PERMIT (v != 0 only)
-│   ├── try IERC20Permit(usdc).permit(msg.sender, pool, maxCostUsdc, deadline, v, r, s)
-│   └── catch: if allowance(msg.sender, pool) < maxCostUsdc → revert InsufficientPermitAllowance
-│       └── Silent fallback on consumed nonce — front-run griefing does not brick the trade
-│
-├── EFFECTS (before external call — CEI)
+├── EFFECTS (CEI — all SSTOREs committed before any external call)
 │   ├── _quantities[outcomeIndex] += shareAmount  [1 SSTORE — single slot only]
 │   ├── _shares[msg.sender][outcomeIndex] += shareAmount [1 SLOAD + 1 SSTORE]
 │   └── _totalTraderShares[outcomeIndex] += shareAmount  [1 SLOAD + 1 SSTORE]
+│
+├── OPTIONAL PERMIT (v != 0 only — external call after state committed)
+│   ├── usdc read from cached slot  [1 warm SLOAD — no external call to pool]
+│   ├── try IERC20Permit(usdc).permit(msg.sender, pool, maxCostUsdc, deadline, v, r, s)
+│   └── catch: if allowance(msg.sender, pool) < maxCostUsdc → revert InsufficientPermitAllowance
+│       └── Silent fallback on consumed nonce — front-run griefing does not brick the trade
 │
 └── INTERACTION
     └── IBlieverV1Pool(pool).collectTradeCost(msg.sender, costUsdc, newLiabilityUsdc)
@@ -213,6 +219,7 @@ buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 - `_loadQuantitiesForBuy`: 2 cold SLOADs (one combined loop, no copy pass) = ~4,200 gas  
 - `costFunction` ×2 inside `calculateTradeCost`: dominant cost  
 - 1 SSTORE to `_quantities[outcomeIndex]` (warm) = ~100 gas vs. n×SSTORE previously  
+- Permit path (when used): 1 warm SLOAD for `usdc` — no external call to pool in this path  
 - 1 `collectTradeCost` external call + `safeTransferFrom` USDC: ~25,000 gas  
 
 ---
@@ -637,7 +644,9 @@ function claimWinnings(address winner, uint256 amount) external;
 // Effect: safeTransfer(winner, amount); revokes MARKET_ROLE when fully claimed
 
 function asset() external view returns (address);
-// Called by: usdcToken() view function (not in trading hot path)
+// Called by: initialize() — once, to cache the USDC address in the `usdc` slot.
+//            usdcToken() view reads the cached slot directly; no live call is made.
+// NOT called in any trading hot path.
 ```
 
 **All four write functions are gated by `MARKET_ROLE` on the pool.** `MARKET_ROLE` is granted to the clone address during `pool.registerMarket()` and revoked automatically by the pool when the market is fully settled. If the pool revokes `MARKET_ROLE` prematurely (bug), all four write calls will revert.

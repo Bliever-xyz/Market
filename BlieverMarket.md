@@ -249,6 +249,7 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
     │
     └── BlieverMarket (no USDC touched)
           │  1. Optional: IERC20Permit(usdc).permit(trader, pool, amount, deadline, v,r,s)
+          │     ├─ `usdc` read from cached storage slot — no external call to pool
           │     └─ Falls back silently to existing allowance if nonce consumed
           │  2. collectTradeCost(trader, cost, newLiability)
           └──────────────────────────────────────────────▶ Pool executes safeTransferFrom
@@ -339,7 +340,8 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 - **`unchecked` increments:** Loop counters in `buy()`, `sell()`, and all internal helpers use `unchecked { ++i; }` since overflow at uint256 range is impossible for `outcomeCount ≤ 100`.
 - **No ERC-20 balance queries:** All USDC transfers are delegated to the pool; no `balanceOf` calls in the hot trading path.
 - **Library inlining:** `LSMath` is a `library` with `internal` functions. All math is inlined by the Solidity compiler with no cross-contract call overhead.
-- **Permit lazy-fetch:** When a permit signature is supplied, `IBlieverV1Pool(pool).asset()` is called once to retrieve the USDC address for the `IERC20Permit` call. This is outside the hot path (permit is optional) and the address is not stored redundantly in market state.
+- **USDC address caching:** The USDC token address is fetched from the pool exactly once — during `initialize()` — and stored in the `usdc` slot. Every subsequent read (permit-path `buy()`, `usdcToken()` view) is a single warm SLOAD with no external call overhead. For high-volume markets with many permit-bearing buys this is a direct per-transaction saving.
+- **Canonical CEI in `buy()`:** Effects (the three storage writes — `_quantities`, `_shares`, `_totalTraderShares`) execute before the optional permit external call and before the pool interaction. State is fully committed prior to any external call; `nonReentrant` provides belt-and-suspenders protection and the pattern makes the security properties trivially auditable.
 
 ---
 
