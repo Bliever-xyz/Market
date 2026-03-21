@@ -280,11 +280,10 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 | **No naked shorts** | CSS enforces q^t ≥ 0 for all traders at all times. Internal ledger prevents bypass. |
 | **Oracle independence** | `resolver` is the only address that may call `resolve()`. Resolution adapter is separately auditable. |
 | **Claim once** | `_claimed[address]` guard prevents double-claim. Written before `claimWinnings` call (CEI). |
-| **Reentrancy** | `ReentrancyGuardUpgradeable` on all state-mutating external functions. |
+| **Reentrancy** | `ReentrancyGuardTransient` (EIP-1153) on all state-mutating external functions. Transient storage resets each transaction; no persistent slot consumed. |
 | **Immutable rules** | No UUPS upgrade. Factory can only pause/expire — cannot change math or resolver. |
 | **Pause asymmetry** | Trading pauses do NOT block `resolve()` or `claim()`. Markets always settle. |
 | **Vault protection** | Buy costs round UP (ceil). Refunds round DOWN (floor). Liability uses floor. All vault-protective. |
-| **Storage integrity** | `__gap[45]` reserves future storage slots. Clone layout is never broken by master updates. |
 
 ---
 
