@@ -45,8 +45,10 @@ Its sole responsibility is to be the **mathematical brain** of a single market: 
        └──────────────────────────────────────────
          • liquidityParameter(q, α)
          • costFunction(q, α)
-         • calculateTradeCost(qFrom, qTo, α)
-         • calculateWorstCaseLoss(q, q⁰, α)
+         • calculateTradeCostDetailed(qFrom, qTo, α)  → (tradeCost, costTo)
+         • calculateTradeCost(qFrom, qTo, α)          → tradeCost  [view path only]
+         • calculateWorstCaseLossFromCosts(costCurrent, costInitial, q)
+         • calculateWorstCaseLoss(q, q⁰, α)           [retained for completeness]
          • getPrice(q, i, α)  /  getAllPrices(q, α)
 ```
 
@@ -89,6 +91,8 @@ $$\varepsilon = \frac{10{,}000}{1 + 0.03 \cdot 2 \cdot \ln 2} \approx \$9{,}601$
 
 This means approximately $9,601 of initial "seed" capital is embedded in each outcome as the vault's market-making commitment. This is **NOT trader capital** — it is the vault's LS-LMSR cost of providing initial liquidity.
 
+**`_initialCost` — The Cached C(q⁰):**  Because q⁰ is immutable after `initialize()`, the value `C(q⁰)` is a per-market constant. `initialize()` evaluates it once and writes it to `_initialCost` (a single storage slot). Every subsequent buy and sell reads `_initialCost` via one warm SLOAD rather than reloading the n-element `_initialQuantities` array and rerunning the full `exp`/`ln` loop for `costFunction(q⁰)`. On a 10-outcome market this is approximately **40,000–60,000 gas saved per trade** on the worst-case-loss step alone.
+
 ### 3.4 Trade Pricing
 
 The cost of a trade moving the market from **q_old** to **q_new** is:
@@ -99,6 +103,8 @@ $$\text{cost} = C(\mathbf{q}_{\text{new}}) - C(\mathbf{q}_{\text{old}})$$
 - **Negative cost** → vault refunds the trader (sell trade).
 
 This is path-independent (a key LS-LMSR property): the cost depends only on the start and end states, never on the order of intermediate trades.
+
+In the hot trading path, this is computed via `LSMath.calculateTradeCostDetailed(qOld, qNew, α)`, which returns both the cost difference **and** `C(qNew)` in a single pass. The returned `C(qNew)` is immediately reused for the vault liability update, ensuring `costFunction(qNew)` is evaluated exactly once per trade.
 
 ---
 
@@ -333,8 +339,11 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 
 ## 10. Gas Architecture Notes
 
-- **Single-slot buy write:** `buy()` writes only `_quantities[outcomeIndex]` — the single slot that changed. The previous `_storeQuantities(qNew, n)` loop (n SSTOREs) is eliminated. For a 10-outcome market this removes 9 unnecessary warm SSTOREs (~900 gas) per buy.
+- **Single-slot buy write:** `buy()` writes only `_quantities[outcomeIndex]` — the single slot that changed. The full `_storeQuantities(qNew, n)` loop (n SSTOREs) is not used on the buy path. For a 10-outcome market this removes 9 unnecessary warm SSTOREs (~900 gas) per buy.
 - **Combined load-and-build for buys:** `_loadQuantitiesForBuy(n, idx, delta)` reads all n quantity slots and simultaneously populates both `qOld` and `qNew` in one loop, replacing the former two-pass pattern (`_loadQuantities` then `_copyArray`). Memory traversal is halved on the buy path.
+- **`costFunction(qNew)` evaluated once per trade:** `buy()` and `sell()` both call `LSMath.calculateTradeCostDetailed(qOld, qNew, α)`, which returns `(tradeCost18, costNew)` — the cost difference **and** `C(qNew)` — in a single pass. The `costNew` value is passed directly to `calculateWorstCaseLossFromCosts`, so `costFunction(qNew)` runs exactly once. The previous pattern called `calculateTradeCost` (which computed `costFunction(qNew)` internally) and then `calculateWorstCaseLoss` (which recomputed `costFunction(qNew)` a second time). On a 10-outcome market this eliminates one full `exp`/`ln` loop — approximately **40,000–60,000 gas saved per trade**.
+- **`C(q⁰)` cached at initialization:** `initialize()` computes `_initialCost = LSMath.costFunction(initQ, α)` once and stores it in a single storage slot. Every buy and sell reads `_initialCost` via a single warm SLOAD (100 gas) instead of calling `_loadInitialQuantities(n)` (n cold SLOADs ≈ 2,100 gas each) followed by a full `costFunction(q⁰)` evaluation. `q⁰` never changes after `initialize()`, making this computation a constant that belongs in storage, not in the trading hot path.
+- **`calculateWorstCaseLossFromCosts` skips redundant math:** With both `costNew` and `_initialCost` already available, the liability helper only needs an O(n) scan of `qNew` to find `max(qᵢ)`. No `exp` or `ln` is executed at all during the liability step.
 - **Memory caching for sells:** The q-vector is loaded from storage into memory once at the top of `sell()`, processed entirely in memory via `_copyArray` and CSS mutation, then written back in a single `_storeQuantities` loop. Sell complexity requires the full write-back; the single-slot optimisation applies only to buys.
 - **Packed storage slots:** The most frequently accessed variables (`pool`, `outcomeCount`, `resolved`, `winningOutcome`) share a single 32-byte slot, yielding a single SLOAD per trade for all four reads.
 - **`unchecked` increments:** Loop counters in `buy()`, `sell()`, and all internal helpers use `unchecked { ++i; }` since overflow at uint256 range is impossible for `outcomeCount ≤ 100`.
