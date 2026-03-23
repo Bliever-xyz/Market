@@ -161,7 +161,7 @@ _quantities        = initQ;
 _initialQuantities = initQ;
 ```
 
-`_quantities` is mutated by every trade. `_initialQuantities` is **never mutated after initialization** — it is the reference q⁰ used for `LSMath.calculateWorstCaseLoss()` throughout the market's lifetime.
+`_quantities` is mutated by every trade. `_initialQuantities` is **never mutated after initialization** — it serves as the source of truth for `getInitialQuantities()` view calls. Its derivative `_initialCost = C(q⁰)` is computed once at initialization and stored in a dedicated slot; every buy and sell reads `_initialCost` via a single warm SLOAD to feed `calculateWorstCaseLossFromCosts()`, replacing any need to reload `_initialQuantities` in the trading hot path.
 
 Additionally, `initialize()` calls `IBlieverV1Pool(_pool).asset()` exactly once and stores the result in the `usdc` slot. This is the only point in the contract's lifetime where the USDC address is fetched externally — subsequent reads in `buy()` (permit path) and `usdcToken()` read the cached slot with a single warm SLOAD.
 
@@ -186,11 +186,14 @@ buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 │           with qNew[outcomeIndex] = qOld[outcomeIndex] + shareAmount
 │
 ├── MATH
-│   ├── tradeCost18 = LSMath.calculateTradeCost(qOld, qNew, _alpha) [int256]
+│   ├── (tradeCost18, costNew) = LSMath.calculateTradeCostDetailed(qOld, qNew, _alpha)
+│   │   └── Returns both C(qNew)−C(qOld) [int256] AND C(qNew) [uint256] in one pass.
+│   │       costFunction(qNew) is evaluated exactly once — costNew is reused below.
 │   ├── assert tradeCost18 >= 0 (revert NegativeBuyCost if not)
 │   ├── costUsdc = _ceilToUsdc(uint256(tradeCost18))
-│   ├── q0 = _loadInitialQuantities(n) [n SLOADs]
-│   ├── newLiability18 = LSMath.calculateWorstCaseLoss(qNew, q0, _alpha)
+│   ├── newLiability18 = LSMath.calculateWorstCaseLossFromCosts(costNew, _initialCost, qNew)
+│   │   └── _initialCost = C(q⁰) read from single warm SLOAD (cached at initialize()).
+│   │       No _loadInitialQuantities() call; no redundant costFunction(q⁰) evaluation.
 │   └── newLiabilityUsdc = _floorToUsdc(newLiability18)
 │
 ├── SLIPPAGE CHECK
@@ -217,7 +220,8 @@ buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 
 **Gas profile estimate** (n=2 outcomes): ~85,000–115,000 gas on Base  
 - `_loadQuantitiesForBuy`: 2 cold SLOADs (one combined loop, no copy pass) = ~4,200 gas  
-- `costFunction` ×2 inside `calculateTradeCost`: dominant cost  
+- `calculateTradeCostDetailed`: runs `costFunction(qNew)` exactly once — returns both `tradeCost18` and `costNew` in a single pass (no second `costFunction` call in the liability step)  
+- `calculateWorstCaseLossFromCosts`: reads `_initialCost` via 1 warm SLOAD (100 gas); runs O(n) scan for `max(qᵢ)` — no `exp`/`ln` at this step  
 - 1 SSTORE to `_quantities[outcomeIndex]` (warm) = ~100 gas vs. n×SSTORE previously  
 - Permit path (when used): 1 warm SLOAD for `usdc` — no external call to pool in this path  
 - 1 `collectTradeCost` external call + `safeTransferFrom` USDC: ~25,000 gas  
@@ -257,8 +261,11 @@ sell(outcomeIndex, shareAmount, minRefundUsdc)
 │   └── if tBar > 0: for all i: qNew[i] += tBar
 │
 ├── MATH
-│   ├── tradeCost18 = LSMath.calculateTradeCost(qOld, qNew, _alpha) [int256, can be negative]
-│   ├── q0, newLiability18, newLiabilityUsdc
+│   ├── (tradeCost18, costNew) = LSMath.calculateTradeCostDetailed(qOld, qNew, _alpha)
+│   │   └── Returns C(qNew)−C(qOld) [int256, can be negative] AND C(qNew) in one pass.
+│   ├── newLiability18 = LSMath.calculateWorstCaseLossFromCosts(costNew, _initialCost, qNew)
+│   │   └── _initialCost read from 1 warm SLOAD; no _loadInitialQuantities(n) call.
+│   ├── newLiabilityUsdc = _floorToUsdc(newLiability18)
 │   │
 │   ├── isRefund = (tradeCost18 < 0)
 │   ├── absAmount18 = |tradeCost18|
@@ -370,26 +377,34 @@ claim()
 ├── CHECKS
 │   ├── resolved == true
 │   ├── !_claimed[caller]
-│   ├── _shares[caller][winningOutcome] > 0
-│   └── payoutUsdc > 0 (shares must be ≥ SHARE_TO_USDC)
+│   └── _shares[caller][winningOutcome] > 0
 │
-├── EFFECTS (before interaction — CEI)
-│   └── _claimed[caller] = true  [1 SSTORE]
-│       ↑ CRITICAL: set before external call to prevent reentrancy double-claim
+├── DUST PATH (payoutUsdc == 0 after floor conversion)
+│   │   Shares < SHARE_TO_USDC (1e12 units, i.e. < 1 USDC-wei).
+│   │   Does NOT revert. Marks position processed and returns.
+│   ├── _claimed[caller] = true          [1 SSTORE — prevents repeat attempts]
+│   ├── emit DustForfeited(caller, wo, shares18)
+│   └── return  ← pool.claimWinnings is NOT called (amount = 0 would revert there)
 │
-└── INTERACTION
-    └── IBlieverV1Pool(pool).claimWinnings(caller, payoutUsdc)
-        Pool effects:
-          info.claimedPayout += payoutUsdc
-          safeTransfer(caller, payoutUsdc)
-          if claimedPayout == settledPayout:
-            _revokeRole(MARKET_ROLE, market)
-            emit MarketFullyClaimed(...)
+├── NORMAL PATH (payoutUsdc > 0)
+│   │
+│   ├── EFFECTS (before interaction — CEI)
+│   │   └── _claimed[caller] = true  [1 SSTORE]
+│   │       ↑ CRITICAL: set before external call to prevent reentrancy double-claim
+│   │
+│   └── INTERACTION
+│       └── IBlieverV1Pool(pool).claimWinnings(caller, payoutUsdc)
+│           Pool effects:
+│             info.claimedPayout += payoutUsdc
+│             safeTransfer(caller, payoutUsdc)
+│             if claimedPayout == settledPayout:
+│               _revokeRole(MARKET_ROLE, market)
+│               emit MarketFullyClaimed(...)
 ```
 
-**Reentrancy note:** The `_claimed[caller] = true` SSTORE happens before the pool call. Even if the caller's `receive()` function re-enters `claim()`, `_claimed[caller]` is already `true`, causing an `AlreadyClaimed` revert. Belt-and-suspenders: `nonReentrant` (via `ReentrancyGuardTransient`) also blocks re-entry via transient storage — the guard flag is set on the first entry and cleared at the end of the top-level call, so any nested re-entry reverts immediately.
+**Reentrancy note:** The `_claimed[caller] = true` SSTORE happens before the pool call on the normal path, and before the `return` on the dust path. Either way, any re-entry into `claim()` by the caller's `receive()` function hits `AlreadyClaimed` immediately. `nonReentrant` (via `ReentrancyGuardTransient`) provides belt-and-suspenders protection via transient storage.
 
-**`payoutUsdc == 0` check:** If a trader holds fewer than `SHARE_TO_USDC` (1e12) shares of the winning outcome, `_floorToUsdc` rounds to 0. The pool's `claimWinnings` would revert on `ZeroAmount`. We catch this early with a more descriptive `PayoutBelowMinimum` error. These tiny positions (< $0.000001 USDC) are economically negligible.
+**Dust path — why emit rather than revert:** A revert on dust would leave the caller unable to mark their position as processed and unable to know whether to retry. The `DustForfeited` event provides a clean, observable on-chain signal to the caller and to off-chain indexers. The dust value is already excluded from `pool.settledPayout` (via the same floor division in `resolve()`), so no USDC is locked — it is absorbed into LP NAV as part of the market-making operating cost. The `_claimed` flag prevents repeated failed attempts from polluting the chain.
 
 ---
 
@@ -408,12 +423,20 @@ expireUnresolved()
 │   └── resolved = true
 │       (winningOutcome stays 0; no legitimate claim will work since settledPayout=0)
 │
-└── INTERACTION
-    └── pool.settleMarket(0)
-        Pool: settledPayout = 0
-              currentLiability = 0 (liability released, vault absorbs as loss)
-              --activeMarketCount
-              if totalPayout == 0: _revokeRole(MARKET_ROLE, market) immediately
+├── INTERACTION
+│   └── pool.settleMarket(0)
+│       Pool: settledPayout = 0
+│             currentLiability = 0 (liability released, vault absorbs as loss)
+│             --activeMarketCount
+│             if totalPayout == 0: _revokeRole(MARKET_ROLE, market) immediately
+│
+└── EVENT
+    └── emit MarketExpired(factory, uint40(block.timestamp), ExpiryReason.TIMEOUT)
+        ├── factory  — the caller (onlyFactory enforced above)
+        ├── timestamp — block.timestamp cast to uint40
+        └── ExpiryReason.TIMEOUT — resolutionDeadline passed with no oracle resolution
+            Off-chain indexers should handle unknown ExpiryReason values gracefully;
+            the enum is reserved for future oracle-error classification without ABI breakage.
 ```
 
 **No traders are harmed:** USDC traders paid during buy trades was already collected by the pool during active trading. The vault absorbs the `riskBudget` as a loss (the LS-LMSR worst-case guarantee). `settleMarket(0)` means `MARKET_ROLE` is immediately revoked (pool logic: zero-payout revocation path).
@@ -536,7 +559,6 @@ Deep copy of a memory array. Used by `sell()` to build `qNew` from `qOld` before
 | `MarketNotResolved()` | `claim()` called before resolution |
 | `AlreadyClaimed()` | `claim()` called by same address twice |
 | `NoWinningShares()` | Caller has 0 shares of the winning outcome |
-| `PayoutBelowMinimum()` | `payoutUsdc == 0` (shares < 1 USDC-wei) |
 | `ShareAmountTooSmall(amount, minimum)` | `shareAmount < MIN_SHARE_AMOUNT` in `buy()` or `sell()` |
 | `SlippageExceeded(actual, limit)` | Cost > `maxCostUsdc` (buy) or refund < `minRefundUsdc` (sell) |
 | `ResolutionDeadlinePassed()` | `resolve()` called after `resolutionDeadline` |
@@ -544,6 +566,13 @@ Deep copy of a memory array. Used by `sell()` to build `qNew` from `qOld` before
 | `InsufficientMarketQuantity()` | `qOld[outcomeIndex] < netReduce` (should never trigger if ledger invariant holds) |
 | `NegativeBuyCost()` | `calculateTradeCost` returned negative for a buy (LSMath bug — should never happen) |
 | `InsufficientPermitAllowance()` | Permit signature was consumed (front-run) and existing allowance is below `maxCostUsdc` |
+
+**Events associated with terminal claim outcomes:**
+
+| Event | Condition |
+|---|---|
+| `WinningsClaimed(winner, wo, shares18, payoutUsdc)` | Normal path: `payoutUsdc > 0`; USDC transferred from vault to winner |
+| `DustForfeited(winner, wo, shares18)` | Dust path: `payoutUsdc == 0`; position marked processed, no USDC transferred |
 
 ---
 
@@ -586,9 +615,10 @@ These should hold after every state transition:
 **Cause:** Caller holds 0 shares for the winning outcome. They may have held a different outcome.  
 **Fix:** Call `getShares(caller, winningOutcome)` before attempting claim.
 
-**Problem:** `claim()` reverts with `PayoutBelowMinimum`.  
-**Cause:** Caller holds shares but < 1e12 units (1 USDC-wei). Economically negligible position.  
-**Fix:** This is expected behaviour. Position is too small to redeem.
+**Problem:** `claim()` succeeds but emits `DustForfeited` instead of `WinningsClaimed`.  
+**Cause:** Caller holds winning shares but fewer than `SHARE_TO_USDC` (1e12 units, i.e. < 1 USDC-wei). Floor conversion yields 0. The position is economically negligible (< $0.000001 USDC) and is marked as processed without a USDC transfer.  
+**Effect:** `_claimed[caller]` is set to `true`. No funds are locked — the dust value was already excluded from `pool.settledPayout` via the same floor division in `resolve()` and is absorbed into LP NAV.  
+**Fix:** No action required. The position has been fully processed.
 
 **Problem:** `resolve()` reverts with `ResolutionDeadlinePassed`.  
 **Cause:** Oracle took too long; `block.timestamp > resolutionDeadline`.  
@@ -619,6 +649,7 @@ These should hold after every state transition:
 - [ ] Verify: `block.timestamp > market.resolutionDeadline()`
 - [ ] Factory calls `market.expireUnresolved()`
 - [ ] Verify: `market.resolved() == true` and `pool.getMarketInfo(market).settledPayout == 0`
+- [ ] Check emitted `MarketExpired(factory, timestamp, ExpiryReason.TIMEOUT)` event — `reason` field is always `TIMEOUT` for deadline expiry; reserved for future oracle-error paths without ABI breakage
 
 ---
 

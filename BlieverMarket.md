@@ -201,7 +201,25 @@ Resolution Adapter calls:
                   └── Emits: MarketSettled(market, totalPayout, profit)
 ```
 
-### 5.2 The Epsilon Exclusion Design
+### 5.2 Emergency Expiry Path
+
+When `resolutionDeadline` passes without oracle resolution, the factory calls `expireUnresolved()`:
+
+```
+factory calls: BlieverMarket.expireUnresolved()
+      │
+      ├── Mark: resolved = true  (winningOutcome stays 0 — no legitimate claim possible)
+      │
+      ├── Call: BlieverV1Pool.settleMarket(0)
+      │           └── settledPayout = 0; MARKET_ROLE immediately revoked; vault absorbs riskBudget
+      │
+      └── Emit: MarketExpired(factory, timestamp, ExpiryReason.TIMEOUT)
+               └── TIMEOUT = resolutionDeadline passed with no oracle resolution
+                   ExpiryReason enum is reserved for future oracle-error variants
+                   without ABI breakage. Off-chain indexers should handle unknown values.
+```
+
+### 5.3 The Epsilon Exclusion Design
 
 Why exclude epsilon from `totalPayoutUsdc`?
 
@@ -294,6 +312,7 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 | **Pause asymmetry** | Trading pauses do NOT block `resolve()` or `claim()`. Markets always settle. |
 | **Vault protection** | Buy costs round UP (ceil). Refunds round DOWN (floor). Liability uses floor. All vault-protective. |
 | **Dust prevention** | `buy()` and `sell()` enforce `shareAmount ≥ MIN_SHARE_AMOUNT` (1e15). Prevents state pollution and event spam from sub-economical positions on cheap L2 gas. |
+| **Dust claim resolution** | Winners whose shares floor to 0 USDC (< 1 USDC-wei) are not silently locked out. `claim()` marks their position as processed (`_claimed = true`) and emits `DustForfeited`. No USDC is transferred and no revert occurs. The dust value is already excluded from `settledPayout` via identical floor division in `resolve()` — it is absorbed into LP NAV as part of the market-making cost. |
 | **Permit griefing resistance** | `buy()` accepts an optional EIP-2612 permit. If the signature is consumed by a front-runner, the call falls back to any pre-existing allowance rather than reverting. A trade is never bricked by a consumed nonce. |
 
 ---
