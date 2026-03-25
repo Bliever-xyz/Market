@@ -233,7 +233,7 @@ buy(outcomeIndex, shareAmount, maxCostUsdc, deadline, v, r, s)
 The sell function is the most complex. Follow this annotated flow carefully.
 
 ```
-sell(outcomeIndex, shareAmount, minRefundUsdc)
+sell(outcomeIndex, shareAmount, minRefundUsdc, maxCostUsdc, deadline, v, r, s)
 │
 ├── MODIFIERS: nonReentrant, whenNotPaused, tradingOpen
 │
@@ -241,24 +241,30 @@ sell(outcomeIndex, shareAmount, minRefundUsdc)
 │   ├── shareAmount >= MIN_SHARE_AMOUNT (1e15)  — dust guard
 │   └── outcomeIndex < outcomeCount
 │
-├── LOAD STATE
+├── LOAD STATE (single targeted read — not the full array)
 │   ├── trader = msg.sender
 │   ├── n, _alpha (cached)
-│   └── qTrader = _loadTraderShares(trader, n) [n mapping SLOADs]
+│   └── traderBal = _shares[trader][outcomeIndex]   [1 mapping SLOAD]
+│       Unlike buy(), only the single sold-outcome balance is read here.
+│       The remaining n−1 outcome slots are only written (+tBar) in the
+│       effects step — they are never read in the cost computation path.
 │
 ├── CSS TRANSLATION COMPUTATION
 │   │
-│   ├── tBar = max(0, shareAmount − qTrader[outcomeIndex])
+│   ├── tBar = max(0, shareAmount − traderBal)
 │   │         ↑ 0 if trader has enough; positive if CSS applies
 │   │
 │   └── netReduce = shareAmount − tBar
 │                   ↑ how much q[outcomeIndex] decreases in the market's q-vector
 │
-├── BUILD q_new (CSS-translated)
-│   ├── qOld = _loadQuantities(n)
-│   ├── qNew = _copyArray(qOld, n)
-│   ├── if netReduce > 0: qNew[outcomeIndex] -= netReduce (checked: ≥ 0 by invariant)
-│   └── if tBar > 0: for all i: qNew[i] += tBar
+├── BUILD q_old and q_new (single combined loop)
+│   └── (qOld, qNew) = _loadQuantitiesForSell(n, outcomeIndex, netReduce, tBar)
+│       One pass: reads all n quantity SLOADs, builds qOld and qNew simultaneously.
+│         • qNew[outcomeIndex] = qOld[outcomeIndex] − netReduce
+│           (actual_delta[sold] = −shareAmount + tBar = −netReduce; tBar is NOT re-added)
+│         • qNew[i ≠ outcomeIndex] = qOld[i] + tBar
+│       InsufficientMarketQuantity guard applied inline at the idx slot.
+│       Replaces: _loadQuantities(n) + _copyArray(qOld, n) + CSS mutation loop.
 │
 ├── MATH
 │   ├── (tradeCost18, costNew) = LSMath.calculateTradeCostDetailed(qOld, qNew, _alpha)
@@ -271,41 +277,62 @@ sell(outcomeIndex, shareAmount, minRefundUsdc)
 │   ├── absAmount18 = |tradeCost18|
 │   └── absAmountUsdc = isRefund ? _floorToUsdc : _ceilToUsdc [direction matters]
 │
-├── SLIPPAGE CHECK
-│   └── if isRefund && absAmountUsdc < minRefundUsdc: revert SlippageExceeded
+├── SLIPPAGE CHECKS (bidirectional)
+│   ├── if isRefund  && absAmountUsdc < minRefundUsdc → revert SlippageExceeded
+│   └── if !isRefund && absAmountUsdc > maxCostUsdc   → revert SlippageExceeded
 │
 ├── EFFECTS (CEI: all SSTOREs before external call)
 │   ├── _storeQuantities(qNew, n) [n SSTOREs]
 │   │
-│   ├── UPDATE SOLD OUTCOME (complex arithmetic — explained below)
-│   │   new position = qTrader[outcomeIndex] + tBar − shareAmount
-│   │   _shares[trader][outcomeIndex] = new position
-│   │   _totalTraderShares[outcomeIndex] += tBar − shareAmount
-│   │   (= _totalTraderShares[outcomeIndex] − netReduce when tBar=0,
-│   │      = _totalTraderShares[outcomeIndex] − qTrader[outcomeIndex] when tBar>0)
+│   ├── UPDATE SOLD OUTCOME
+│   │   new position = traderBal + tBar − shareAmount   (proven ≥ 0 by CSS invariant)
+│   │   unchecked: _shares[trader][outcomeIndex]    = traderBal + tBar − shareAmount
+│   │   unchecked: _totalTraderShares[outcomeIndex] += tBar − shareAmount
 │   │
 │   └── if tBar > 0: for all j ≠ outcomeIndex:
 │           _shares[trader][j] += tBar
 │           _totalTraderShares[j] += tBar
 │
 └── INTERACTION (direction depends on isRefund)
-    ├── if isRefund: pool.distributeRefund(trader, absAmountUsdc, newLiabilityUsdc)
-    │               Pool: IERC20(usdc).safeTransfer(trader, absAmountUsdc)
-    └── else:        pool.collectTradeCost(trader, absAmountUsdc, newLiabilityUsdc)
-                    Pool: IERC20(usdc).safeTransferFrom(trader, pool, absAmountUsdc)
-                    ⚠️  Trader must have approved pool for USDC (unusual for a sell)
+    ├── if isRefund:
+    │     pool.distributeRefund(trader, absAmountUsdc, newLiabilityUsdc)
+    │     Pool: IERC20(usdc).safeTransfer(trader, absAmountUsdc)
+    │     ← No permit ever attempted on the refund path (gas saved)
+    │
+    └── else (CSS net-cost):
+          ── OPTIONAL PERMIT (v != 0 only — gated inside !isRefund) ──
+          ├── usdc read from cached slot  [1 warm SLOAD]
+          ├── try IERC20Permit(usdc).permit(trader, pool, maxCostUsdc, deadline, v, r, s)
+          └── catch: if allowance(trader, pool) < absAmountUsdc → revert InsufficientPermitAllowance
+              └── Silent fallback on consumed nonce — front-run griefing does not brick the trade
+
+          pool.collectTradeCost(trader, absAmountUsdc, newLiabilityUsdc)
+          Pool: IERC20(usdc).safeTransferFrom(trader, pool, absAmountUsdc)
+          ⚠️  Trader must have approved pool (not this contract) for ≥ maxCostUsdc USDC,
+              OR supply a valid EIP-2612 permit signature via v/r/s/deadline.
+              Pass v=0/r=0/s=0/deadline=0 to skip permit and rely on pre-existing approval.
 ```
 
 ### CSS Arithmetic Proof (Sold Outcome New Balance)
 
 Let:
-- `B = qTrader[outcomeIndex]` (trader's old balance)
+- `B = traderBal` (trader's old balance for sold outcome — single SLOAD)
 - `S = shareAmount` (requested sell amount)
 - `T = tBar = max(0, S − B)`
+- `R = netReduce = S − T`
 
-**Actual delta for sold outcome** = `−S + T`
+**CSS q-vector delta (Othman et al. §3.3.2):**
 
-**New position** = `B + (−S + T) = B − S + T`
+```
+actual_delta[i=sold] = −S + T = −R         (= −netReduce)
+actual_delta[j≠i]    = +T                   (= +tBar)
+```
+
+This means tBar is the translation added to every OTHER outcome's q slot. For the sold outcome, the entire net delta is already captured by `−netReduce` — adding tBar again would overstate q[sold] by tBar units, breaking the market state invariant.
+
+**Trader balance change:**
+
+New position = B + actual_delta[i] = B − R = B + T − S
 
 Case A: T = 0 (B ≥ S):  
 `new = B − S ≥ 0` ✓ (trader had enough shares)
@@ -313,17 +340,39 @@ Case A: T = 0 (B ≥ S):
 Case B: T = S − B (B < S):  
 `new = B − S + (S − B) = 0` ✓ (trader sold everything, position goes to zero)
 
-In both cases: **new position ≥ 0**. CSS invariant maintained. ✓
+In both cases: **new position ≥ 0**. CSS invariant maintained. ✓  
+Because underflow cannot occur, both balance writes use `unchecked` blocks.
+
+**Concrete verification (Scenario: CSS triggers):**
+
+q = [1100, 900], traderBal = 300, shareAmount = 500, tBar = 200, netReduce = 300.
+
+- Correct: qNew[0] = 1100 − 300 = **800** (`q − netReduce`)
+- Buggy:   qNew[0] = 1100 − 300 + 200 = **1000** (`q − netReduce + tBar` — inflated by tBar)
+
+Sum-of-positions check: trader gets [0, 200], epsilon [100, 100], others [700, 800].  
+q[0] = 0+100+700 = **800** ✓ matches correct formula only.
 
 ### `_totalTraderShares` update for sold outcome
 
 ```solidity
-_totalTraderShares[outcomeIndex] = _totalTraderShares[outcomeIndex] + tBar - shareAmount;
+unchecked {
+    _totalTraderShares[outcomeIndex] = _totalTraderShares[outcomeIndex] + tBar - shareAmount;
+}
 ```
 
-This is equivalent to `+= (tBar − shareAmount) = −netReduce`. When tBar = 0, it's a simple decrease by shareAmount. When tBar > 0 (CSS), decrease is by `netReduce = shareAmount − tBar = B` (the actual position sold, which may be less than shareAmount).
+This is equivalent to `+= (tBar − shareAmount) = −netReduce`. When tBar = 0, it's a simple decrease by shareAmount. When tBar > 0 (CSS), the decrease is by `netReduce = shareAmount − tBar = B` (the actual position sold).
 
-**Underflow guard:** Since `_totalTraderShares[i]` is the sum of all traders' shares for outcome i, and each trader's shares are ≥ 0, the total is always ≥ any individual's holding. Since `netReduce = shareAmount − tBar ≤ qTrader[outcomeIndex] ≤ _totalTraderShares[outcomeIndex]`, underflow cannot occur. (Same invariant as the q-vector.)
+**Underflow guard:** `_totalTraderShares[i]` is the sum of all traders' shares for outcome i. Since `netReduce = shareAmount − tBar ≤ traderBal ≤ _totalTraderShares[outcomeIndex]`, underflow cannot occur. The `unchecked` block is safe by this invariant.
+
+**Gas profile estimate** (n=2 outcomes, standard refund sell): ~95,000–130,000 gas on Base  
+- `_shares[trader][outcomeIndex]`: 1 cold mapping SLOAD = ~2,100 gas (replaces n SLOADs from `_loadTraderShares`)  
+- `_loadQuantitiesForSell`: 2 cold SLOADs in one combined loop (replaces `_loadQuantities` + `_copyArray` + CSS loop = 3 passes)  
+- `calculateTradeCostDetailed`: runs `costFunction(qNew)` exactly once — returns both `tradeCost18` and `costNew` in a single pass  
+- `calculateWorstCaseLossFromCosts`: 1 warm SLOAD for `_initialCost`; O(n) scan — no `exp`/`ln`  
+- `_storeQuantities`: n SSTOREs (sell always writes full q-vector; CSS may change every slot)  
+- Permit path: **never reached** on standard refund sells — zero overhead on the common path  
+- 1 `distributeRefund` external call + `safeTransfer` USDC: ~25,000 gas
 
 ---
 
@@ -492,6 +541,33 @@ function _loadQuantitiesForBuy(uint256 n, uint256 idx, uint256 delta)
 ```
 Reads all n storage slots once and simultaneously builds both `qOld` (unmodified snapshot) and `qNew` (with `qNew[idx] += delta`). Replaces the pattern of `_loadQuantities(n)` followed by `_copyArray(qOld, n)` — two full memory passes reduced to one. Called exclusively by `buy()`.
 
+### `_loadQuantitiesForSell(n, idx, netReduce, tBar)`
+```solidity
+function _loadQuantitiesForSell(uint256 n, uint256 idx, uint256 netReduce, uint256 tBar)
+    internal view
+    returns (uint256[] memory qOld, uint256[] memory qNew)
+{
+    qOld = new uint256[](n);
+    qNew = new uint256[](n);
+    for (uint256 i = 0; i < n;) {
+        uint256 q = _quantities[i];
+        qOld[i] = q;
+        if (i == idx) {
+            if (netReduce > 0 && q < netReduce) revert InsufficientMarketQuantity();
+            unchecked { qNew[i] = q - netReduce; }   // actual_delta[sold] = −netReduce
+        } else {
+            qNew[i] = q + tBar;                       // actual_delta[j≠i] = +tBar
+        }
+        unchecked { ++i; }
+    }
+}
+```
+Mirrors `_loadQuantitiesForBuy` for the sell path. Reads all n storage slots once and simultaneously constructs `qOld` and the CSS-translated `qNew` in a single loop pass. Replaces the three-step pattern of `_loadQuantities(n)` + `_copyArray(qOld, n)` + a separate CSS mutation loop.
+
+**Critical CSS q-vector formula:** `qNew[idx] = qOld[idx] − netReduce`. The `tBar` translation is applied only to `j ≠ idx`. For the sold outcome, `netReduce = shareAmount − tBar` fully encodes the net delta (`actual_delta[sold] = −shareAmount + tBar = −netReduce`). Adding `+tBar` to the sold outcome slot would overstate it by `tBar` units, inflating the market quantity vector and corrupting all subsequent cost and liability calculations.
+
+The `InsufficientMarketQuantity` guard is embedded at the `idx` slot — no separate pre-check loop is needed. Called exclusively by `sell()`.
+
 ### `_loadTraderShares(trader, n)`
 ```solidity
 function _loadTraderShares(address trader, uint256 n) internal view returns (uint256[] memory qt) {
@@ -502,18 +578,18 @@ function _loadTraderShares(address trader, uint256 n) internal view returns (uin
     }
 }
 ```
-Used in `sell()` to know the trader's full position vector before CSS computation.
+Loads all n per-outcome balances into a memory array. Used in **view functions only** — `getSellEstimate()` and `getAllShares()` — where the full position vector is needed to simulate CSS without state mutations. The `sell()` write path reads only `_shares[trader][outcomeIndex]` directly (a single mapping SLOAD) to compute `tBar`, avoiding the n-SLOAD overhead of this helper on every live sell transaction.
 
 ### `_storeQuantities(qNew, n)`
 ```solidity
 function _storeQuantities(uint256[] memory qNew, uint256 n) internal {
     for (uint256 i = 0; i < n;) {
-        _quantities[i] = qNew[i];   // SSTORE (warm after _loadQuantities)
+        _quantities[i] = qNew[i];   // SSTORE (warm after _loadQuantitiesForSell)
         unchecked { ++i; }
     }
 }
 ```
-Writes the full mutated quantity vector back to storage. Called by `sell()` (CEI-compliant, before external call). Not called by `buy()` — buys write only the single changed slot directly (`_quantities[outcomeIndex] += shareAmount`).
+Writes the full mutated quantity vector back to storage. Called by `sell()` (CEI-compliant, before external call). Not called by `buy()` — buys write only the single changed slot directly (`_quantities[outcomeIndex] += shareAmount`). For `sell()`, the full write-back is necessary because CSS may increment every slot in `qNew`.
 
 ### `_floorToUsdc(amount18)` / `_ceilToUsdc(amount18)`
 ```solidity
@@ -537,7 +613,7 @@ function _copyArray(uint256[] memory src, uint256 n) internal pure returns (uint
     }
 }
 ```
-Deep copy of a memory array. Used by `sell()` to build `qNew` from `qOld` before CSS mutation — necessary because Solidity memory arrays are passed by reference; modifying `qNew` in-place without a copy would corrupt `qOld` (needed for the `calculateTradeCost` call).
+Deep copy of a memory array. Used exclusively by **view functions** (`getBuyCost`, `getSellEstimate`) where `qOld` must remain unmodified alongside a separately mutated `qNew`. Not used in the `buy()` or `sell()` write paths — `_loadQuantitiesForBuy` and `_loadQuantitiesForSell` each build both arrays in a single storage-read pass, making a post-load copy unnecessary.
 
 ---
 
@@ -560,7 +636,7 @@ Deep copy of a memory array. Used by `sell()` to build `qNew` from `qOld` before
 | `AlreadyClaimed()` | `claim()` called by same address twice |
 | `NoWinningShares()` | Caller has 0 shares of the winning outcome |
 | `ShareAmountTooSmall(amount, minimum)` | `shareAmount < MIN_SHARE_AMOUNT` in `buy()` or `sell()` |
-| `SlippageExceeded(actual, limit)` | Cost > `maxCostUsdc` (buy) or refund < `minRefundUsdc` (sell) |
+| `SlippageExceeded(actual, limit)` | Cost > `maxCostUsdc` (buy), refund < `minRefundUsdc` (sell refund path), or CSS net cost > `maxCostUsdc` (sell cost path) |
 | `ResolutionDeadlinePassed()` | `resolve()` called after `resolutionDeadline` |
 | `ResolutionDeadlineNotPassed()` | `expireUnresolved()` called before deadline passes |
 | `InsufficientMarketQuantity()` | `qOld[outcomeIndex] < netReduce` (should never trigger if ledger invariant holds) |
@@ -590,6 +666,7 @@ These should hold after every state transition:
 | I6 | After claim: `_claimed[trader] == true` | Read mapping |
 | I7 | `_totalTraderShares[i] <= _quantities[i]` for all i | Trader shares never exceed market quantity |
 | I8 | Sum of `newLiability` across all pool.collectTradeCost calls ≤ `riskBudget` | Pool view `getMarketInfo()` |
+| I9 | After a CSS sell: `_quantities[sold] = _quantities_before[sold] − netReduce` (NOT `− netReduce + tBar`) | Read q-vector before/after CSS sell; confirm `q[sold]` decreased by exactly `netReduce = shareAmount − tBar` |
 
 ---
 
@@ -607,9 +684,28 @@ These should hold after every state transition:
 **Cause:** A permit signature was supplied (`v != 0`), but the nonce was already consumed — most likely by a front-running bot that extracted the permit from the mempool. The fallback allowance check found the trader's allowance for the pool is below `maxCostUsdc`.  
 **Fix (immediate):** Re-submit with `v=0, r=0, s=0, deadline=0` and a prior `USDC.approve(pool, amount)` call. The permit path is optional and does not need to be retried. **Fix (long-term):** Frontend should use `deadline` values close to the current block timestamp to limit the griefing window.
 
+**Problem:** After a CSS sell, `getQuantities()[outcomeIndex]` does not match the expected value: `q_before[i] − netReduce`.  
+**Cause:** A prior version of the contract incorrectly applied `+tBar` to the sold outcome slot in the q-vector (equivalent to computing `q − netReduce + tBar` instead of `q − netReduce`). This is the CSS q-vector bug.  
+**Diagnosis:** Compute `expected = q_before[sold] − (shareAmount − tBar)`. If actual `q[sold] > expected` by exactly `tBar`, the buggy formula was used.  
+**Impact:** All trades after a CSS sell are priced off an inflated q-vector. The sold outcome's price is understated, and the overall liability is incorrectly computed.  
+**Fix:** Confirmed corrected in current code — `_loadQuantitiesForSell` uses `q - netReduce` for the idx slot (not `q - netReduce + tBar`). The `getSellEstimate` view function applies the same fix.
+
 **Problem:** `sell()` reverts with `TradingClosed`.  
 **Cause:** Either `block.timestamp > tradingDeadline` or `resolved == true`.  
 **Fix:** Check both conditions with `getMarketStatus()`.
+
+**Problem:** `sell()` reverts with `SlippageExceeded` on the refund side.  
+**Cause:** Another trade changed the q-vector between the UI quote and the on-chain execution, causing the refund to fall below `minRefundUsdc`.  
+**Fix:** Increase slippage tolerance (decrease `minRefundUsdc` by 1–5%) or re-quote immediately before submitting.
+
+**Problem:** `sell()` reverts with `SlippageExceeded` on a CSS net-cost sell.  
+**Cause:** The CSS translation produced a net payment to the vault that exceeds `maxCostUsdc`. This is an unexpected cost scenario — either market conditions shifted or the CSS translation was larger than anticipated.  
+**Fix:** Re-quote via `getSellEstimate()`. If CSS is unexpectedly large, the trader may need to split the sell into smaller amounts. Pass a higher `maxCostUsdc` only after understanding the CSS cost.
+
+**Problem:** `sell()` reverts with `InsufficientPermitAllowance` on a CSS net-cost sell.  
+**Cause:** A permit signature was supplied (`v != 0`) but the nonce was already consumed, and the trader's existing allowance for the pool is below `absAmountUsdc`.  
+**Fix (immediate):** Re-submit with `v=0, r=0, s=0, deadline=0` and a prior `USDC.approve(pool, maxCostUsdc)` call.  
+**Fix (long-term):** Use a `deadline` close to the current block timestamp to narrow the griefing window.
 
 **Problem:** `claim()` reverts with `NoWinningShares`.  
 **Cause:** Caller holds 0 shares for the winning outcome. They may have held a different outcome.  

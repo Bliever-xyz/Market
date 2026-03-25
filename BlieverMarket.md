@@ -287,6 +287,19 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
           │  distributeRefund(trader, refund, newLiability)
           └──────────────────────────────────────────────▶ Pool executes transfer
 
+                     SELL TRADE (CSS net cost)
+                     ─────────────────────────
+  Trader ──USDC──▶  BlieverV1Pool
+    │   (safeTransferFrom, approved by trader — via direct approve OR EIP-2612 permit)
+    │
+    └── BlieverMarket (no USDC touched)
+          │  1. Optional: IERC20Permit(usdc).permit(trader, pool, maxCostUsdc, deadline, v,r,s)
+          │     ├─ Attempted ONLY when isRefund == false (net-cost CSS path)
+          │     ├─ `usdc` read from cached storage slot — no external call to pool
+          │     └─ Falls back silently to existing allowance if nonce consumed
+          │  2. collectTradeCost(trader, cost, newLiability)
+          └──────────────────────────────────────────────▶ Pool executes safeTransferFrom
+
                      CLAIM WINNINGS
                      ─────────────
   Winner ◀──USDC──  BlieverV1Pool
@@ -310,10 +323,10 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 | **Reentrancy** | `ReentrancyGuardTransient` (EIP-1153) on all state-mutating external functions. Transient storage resets each transaction; no persistent slot consumed. |
 | **Immutable rules** | No UUPS upgrade. Factory can only pause/expire — cannot change math or resolver. |
 | **Pause asymmetry** | Trading pauses do NOT block `resolve()` or `claim()`. Markets always settle. |
-| **Vault protection** | Buy costs round UP (ceil). Refunds round DOWN (floor). Liability uses floor. All vault-protective. |
+| **Vault protection** | Buy costs round UP (ceil). Refunds round DOWN (floor). Liability uses floor. All vault-protective. `sell()` enforces slippage on both directions: `minRefundUsdc` guards the refund side; `maxCostUsdc` guards the CSS cost side. |
 | **Dust prevention** | `buy()` and `sell()` enforce `shareAmount ≥ MIN_SHARE_AMOUNT` (1e15). Prevents state pollution and event spam from sub-economical positions on cheap L2 gas. |
 | **Dust claim resolution** | Winners whose shares floor to 0 USDC (< 1 USDC-wei) are not silently locked out. `claim()` marks their position as processed (`_claimed = true`) and emits `DustForfeited`. No USDC is transferred and no revert occurs. The dust value is already excluded from `settledPayout` via identical floor division in `resolve()` — it is absorbed into LP NAV as part of the market-making cost. |
-| **Permit griefing resistance** | `buy()` accepts an optional EIP-2612 permit. If the signature is consumed by a front-runner, the call falls back to any pre-existing allowance rather than reverting. A trade is never bricked by a consumed nonce. |
+| **Permit griefing resistance** | `buy()` and `sell()` (CSS cost path) both accept an optional EIP-2612 permit. If the signature is consumed by a front-runner, the call falls back to any pre-existing allowance rather than reverting. A trade is never bricked by a consumed nonce. On standard refund sells the permit code is never reached, saving gas on the common path. |
 
 ---
 
@@ -360,16 +373,19 @@ Market contracts are **intentionally not upgradeable**. Traders must have crypto
 
 - **Single-slot buy write:** `buy()` writes only `_quantities[outcomeIndex]` — the single slot that changed. The full `_storeQuantities(qNew, n)` loop (n SSTOREs) is not used on the buy path. For a 10-outcome market this removes 9 unnecessary warm SSTOREs (~900 gas) per buy.
 - **Combined load-and-build for buys:** `_loadQuantitiesForBuy(n, idx, delta)` reads all n quantity slots and simultaneously populates both `qOld` and `qNew` in one loop, replacing the former two-pass pattern (`_loadQuantities` then `_copyArray`). Memory traversal is halved on the buy path.
+- **Combined load-and-build for sells:** `_loadQuantitiesForSell(n, idx, netReduce, tBar)` mirrors the buy optimisation for the sell path. It reads all n quantity slots once and simultaneously constructs `qOld` and `qNew` with the CSS mutation applied inline, replacing the former three-step pattern (`_loadQuantities` + `_copyArray` + CSS loop). The `InsufficientMarketQuantity` guard is embedded at the single affected slot, eliminating a redundant branch.
+- **Single-slot trader balance read on sell:** `sell()` reads only `_shares[trader][outcomeIndex]` (one mapping SLOAD) to compute `tBar` and update the sold-outcome position. The full `_loadTraderShares(trader, n)` load (n mapping SLOADs) is no longer used in the write path — for a 10-outcome market this removes 9 cold mapping SLOADs (~18,900 gas) on every standard sell.
 - **`costFunction(qNew)` evaluated once per trade:** `buy()` and `sell()` both call `LSMath.calculateTradeCostDetailed(qOld, qNew, α)`, which returns `(tradeCost18, costNew)` — the cost difference **and** `C(qNew)` — in a single pass. The `costNew` value is passed directly to `calculateWorstCaseLossFromCosts`, so `costFunction(qNew)` runs exactly once. The previous pattern called `calculateTradeCost` (which computed `costFunction(qNew)` internally) and then `calculateWorstCaseLoss` (which recomputed `costFunction(qNew)` a second time). On a 10-outcome market this eliminates one full `exp`/`ln` loop — approximately **40,000–60,000 gas saved per trade**.
 - **`C(q⁰)` cached at initialization:** `initialize()` computes `_initialCost = LSMath.costFunction(initQ, α)` once and stores it in a single storage slot. Every buy and sell reads `_initialCost` via a single warm SLOAD (100 gas) instead of calling `_loadInitialQuantities(n)` (n cold SLOADs ≈ 2,100 gas each) followed by a full `costFunction(q⁰)` evaluation. `q⁰` never changes after `initialize()`, making this computation a constant that belongs in storage, not in the trading hot path.
 - **`calculateWorstCaseLossFromCosts` skips redundant math:** With both `costNew` and `_initialCost` already available, the liability helper only needs an O(n) scan of `qNew` to find `max(qᵢ)`. No `exp` or `ln` is executed at all during the liability step.
-- **Memory caching for sells:** The q-vector is loaded from storage into memory once at the top of `sell()`, processed entirely in memory via `_copyArray` and CSS mutation, then written back in a single `_storeQuantities` loop. Sell complexity requires the full write-back; the single-slot optimisation applies only to buys.
+- **Memory caching for sells:** The q-vector is loaded from storage into memory once at the top of `sell()` via `_loadQuantitiesForSell`, which simultaneously builds the CSS-translated `qNew`. The mutated vector is written back in a single `_storeQuantities` loop. The full write-back is necessary on the sell path because CSS may change multiple slots.
+- **Sell permit gated on cost path:** The EIP-2612 permit call in `sell()` is wrapped inside `if (!isRefund)`, so the `usdc` slot read and external `permit()` call are completely bypassed for all standard refund sells. Gas overhead for the permit infrastructure is zero on the common path.
 - **Packed storage slots:** The most frequently accessed variables (`pool`, `outcomeCount`, `resolved`, `winningOutcome`) share a single 32-byte slot, yielding a single SLOAD per trade for all four reads.
-- **`unchecked` increments:** Loop counters in `buy()`, `sell()`, and all internal helpers use `unchecked { ++i; }` since overflow at uint256 range is impossible for `outcomeCount ≤ 100`.
+- **`unchecked` increments:** Loop counters in `buy()`, `sell()`, and all internal helpers use `unchecked { ++i; }` since overflow at uint256 range is impossible for `outcomeCount ≤ 100`. The sold-outcome balance arithmetic in `sell()` also uses `unchecked` where underflow is proven impossible by the CSS invariant.
 - **No ERC-20 balance queries:** All USDC transfers are delegated to the pool; no `balanceOf` calls in the hot trading path.
 - **Library inlining:** `LSMath` is a `library` with `internal` functions. All math is inlined by the Solidity compiler with no cross-contract call overhead.
-- **USDC address caching:** The USDC token address is fetched from the pool exactly once — during `initialize()` — and stored in the `usdc` slot. Every subsequent read (permit-path `buy()`, `usdcToken()` view) is a single warm SLOAD with no external call overhead. For high-volume markets with many permit-bearing buys this is a direct per-transaction saving.
-- **Canonical CEI in `buy()`:** Effects (the three storage writes — `_quantities`, `_shares`, `_totalTraderShares`) execute before the optional permit external call and before the pool interaction. State is fully committed prior to any external call; `nonReentrant` provides belt-and-suspenders protection and the pattern makes the security properties trivially auditable.
+- **USDC address caching:** The USDC token address is fetched from the pool exactly once — during `initialize()` — and stored in the `usdc` slot. Every subsequent read (permit-path `buy()`, permit-path CSS `sell()`, `usdcToken()` view) is a single warm SLOAD with no external call overhead.
+- **Canonical CEI in `buy()` and `sell()`:** Effects (storage writes) execute before the optional permit external call and before the pool interaction. State is fully committed prior to any external call; `nonReentrant` provides belt-and-suspenders protection and the pattern makes the security properties trivially auditable.
 
 ---
 
