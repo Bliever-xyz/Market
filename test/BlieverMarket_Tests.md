@@ -73,19 +73,31 @@ Two live market clones are deployed in `setUp()`:
 | Contract | Purpose |
 |---|---|
 | `MockUSDC` | 6-decimal ERC-20 stub. `mint()`, `approve()`, `transfer()`, `transferFrom()`. No EIP-2612 permit (permit tests pass `v=0`). |
-| `MockPool` | Implements `IBlieverV1Pool`. Executes real USDC transfers so token-balance assertions work end-to-end. Exposes spy counters (`collectCalls`, `refundCalls`, `settleCalls`, `claimCalls`) and last-call arguments (`lastTrader`, `lastCost`, etc.) for assertion convenience. `seed()` pre-funds the pool. `resetCounters()` resets counters between assertions in a single test. |
+| `MockUSDCPermit` | OZ `ERC20Permit`-based 6-decimal token. Provides a spec-compliant `permit()` function, proper nonce tracking, and a valid `DOMAIN_SEPARATOR`. Required by the permit happy-path and front-run revert tests. |
+| `MockPool` | Implements `IBlieverV1Pool`. Accepts any ERC-20 address so the same mock works with both `MockUSDC` and `MockUSDCPermit`. Executes real token transfers so token-balance assertions hold end-to-end. Exposes spy counters (`collectCalls`, `refundCalls`, `settleCalls`, `claimCalls`) and last-call arguments (`lastTrader`, `lastCost`, etc.) for assertion convenience. `seed()` pre-funds the pool via `IMintable`. `resetCounters()` resets counters between assertions in a single test. |
+
+**State added by the base:**
+
+| Name | Type | Purpose |
+|---|---|---|
+| `ALICE_PK` | `uint256` constant | Private key `0xA11CE` for `aliceP`; required by `vm.sign()` for EIP-712 permit signing |
+| `aliceP` | `address` | `vm.addr(ALICE_PK)` — the permit test signer |
+| `permitUsdc` | `MockUSDCPermit` | EIP-2612 capable token backing the permit market |
+| `permitPool` | `MockPool` | Separate pool backed by `permitUsdc` |
+| `market2p` | `BlieverMarket` | 2-outcome clone whose USDC is `permitUsdc` — used by all permit tests |
 
 **Helpers:**
 
 | Helper | What it does |
 |---|---|
-| `_setupTrader(addr, amount)` | Mints USDC to trader and approves pool with `type(uint256).max`. Mirrors the exact on-chain UX flow. |
+| `_setupTrader(addr, amount)` | Mints `MockUSDC` to trader and approves pool with `type(uint256).max`. Mirrors the exact on-chain UX flow. |
 | `_buy(market, trader, outcomeIdx, shareAmt)` | Calls `getBuyCost()`, mints enough USDC, then calls `market.buy()` with 2× cost cap. Returns actual cost. |
 | `_sell(market, trader, outcomeIdx, shareAmt)` | Calls `getSellEstimate()` then `market.sell()` with `minRefund=0`. Returns estimated refund. |
 | `_resolve(market, winner)` | Pranks resolver and calls `resolve(winner)`. |
 | `_newClone(nOutcomes, epsilon, qId)` | Deploys a fresh EIP-1167 clone from the shared `impl`. Useful for isolated tests that don't want side effects from `market2`/`market7`. |
 | `_sharesSlot(trader, idx)` | Computes the `keccak256` storage slot for `_shares[trader][idx]`. Used in the dust test to inject sub-`MIN_SHARE` balances directly. |
 | `_claimedSlot(trader)` | Computes the storage slot for `_claimed[trader]`. |
+| `_permitSignature(owner, ownerPk, spender, value, deadline)` | Computes the EIP-712 `Permit` struct hash against `permitUsdc`'s current nonce and `DOMAIN_SEPARATOR`, then calls `vm.sign(ownerPk, digest)`. Returns `(v, r, s)` ready for use in `market.buy()` or `market.sell()`. Only valid for `permitUsdc` — do not use with `MockUSDC`. |
 
 ---
 
@@ -161,7 +173,7 @@ Two live market clones are deployed in `setUp()`:
 #### Buy — Reverts
 - `shareAmount < MIN_SHARE_AMOUNT` → `ShareAmountTooSmall`
 - `outcomeIndex >= outcomeCount` → `InvalidOutcomeIndex`
-- `maxCostUsdc = 0` (actual cost > 0) → `SlippageExceeded`
+- `maxCostUsdc = 0` (actual cost > 0) → `SlippageExceeded` (selector verified, not bare revert)
 - While paused → `EnforcedPause`
 - After `tradingDeadline` → `TradingClosed`
 - After resolution → `TradingClosed`
@@ -184,10 +196,15 @@ Two live market clones are deployed in `setUp()`:
 #### Sell — Reverts
 - `shareAmount < MIN_SHARE_AMOUNT` → `ShareAmountTooSmall`
 - `outcomeIndex >= outcomeCount` → `InvalidOutcomeIndex`
-- `minRefundUsdc > actual refund` → `SlippageExceeded`
+- `minRefundUsdc > actual refund` → `SlippageExceeded` (selector verified, not bare revert)
 - While paused → `EnforcedPause`
 - After `tradingDeadline` → `TradingClosed`
 - After resolution → `TradingClosed`
+
+#### Buy — EIP-2612 Permit Path
+- **Happy path** (`test_buy_withPermit_happyPath`): `aliceP` holds zero allowance. A valid EIP-712 signature is generated with `_permitSignature()` and passed as `v/r/s` into `buy()`. The permit is consumed inside the `try` block and the trade completes. Share balance is credited and `permitUsdc.nonces(aliceP)` increments to 1.
+- **Front-run, zero allowance** (`test_buy_permit_frontrun_revertsInsufficientPermitAllowance`): Attacker pre-consumes `aliceP`'s permit nonce. `aliceP` calls `buy()` with the now-stale signature. The `try` block fails (nonce consumed). The `catch` block checks `allowance(aliceP, pool) < maxCostUsdc`. Because `aliceP` has zero allowance, the call reverts with `InsufficientPermitAllowance`.
+- **Front-run, sufficient allowance** (`test_buy_permit_frontrun_fallsBackToAllowance_succeeds`): Same front-run scenario, but `aliceP` has a prior `approve(pool, max)` in place. The `catch` block finds sufficient allowance and the buy succeeds silently without reverting.
 
 #### View Estimates
 - `getSellEstimate()` output matches actual pool refund within ±1 USDC-wei.
@@ -327,7 +344,7 @@ seed = "0xBELIEVER"
 | `testFuzz_sell_css_sharesNeverNegative` | CSS leaves `shares[trader][i] ≥ 0` for all i |
 | `testFuzz_sell_quantityNeverBelowEpsilon` | `q[i] ≥ 0` after any buy + sell sequence |
 | `testFuzz_cssTranslation_consistent` | `getCssTranslation()` output matches expected `tBar` formula |
-| `testFuzz_buy_alwaysReverts_zeroMaxCost` | `buy(..., maxCost=0)` always reverts |
+| `testFuzz_buy_alwaysReverts_zeroMaxCost` | `buy(..., maxCost=0)` always reverts with `SlippageExceeded` (selector verified) |
 | `testFuzz_sell_zeroMinRefund_neverReverts` | `sell(..., minRefund=0)` never false-reverts |
 | `testFuzz_buy_succeedsWhenCapGeActualCost` | `buy()` always succeeds when `maxCost ≥ actualCost` |
 | `testFuzz_buy_revert_belowMinShare` | Any `amt < 1e15` reverts with `ShareAmountTooSmall` |
@@ -378,7 +395,7 @@ Wraps all state-mutating market functions. Foundry calls these in random order a
 | I-4 | `invariant_I4_sumOfPricesGtOne` | `Σ prices > 1e18` while market is active (LS-LMSR spread invariant) |
 | I-5 | `invariant_I5_resolvedIsMonotone` | `resolved` can only transition `false → true`, never back |
 | I-6 | `invariant_I6_claimedIsMonotone` | `hasClaimed[addr]` can only transition `false → true`, never back |
-| I-7 | `invariant_I7_marketStatus_consistent` | `getMarketStatus().tradingOpen` matches `!resolved && timestamp ≤ tradingDeadline` |
+| I-7 | `invariant_I7_marketStatus_consistent` | `getMarketStatus().tradingOpen` matches `!resolved && block.timestamp < tradingDeadline` (strict `<` mirrors `_tradingOpen()`) |
 | I-8 | `invariant_I8_initialQuantitiesImmutable` | `getInitialQuantities()` always returns original epsilon values |
 
 ---
@@ -387,28 +404,30 @@ Wraps all state-mutating market functions. Foundry calls these in random order a
 
 **Run:** `forge test --match-contract BlieverMarket_GasTest --gas-report`
 
-**Purpose:** Detect gas regressions automatically in CI.
+**Purpose:** Log gas figures for every hot path so `forge snapshot` can track regressions automatically.
+
+**Design:** There are **no `assertLt` caps** in this file. Hard-number assertions create brittle CI failures because observed gas shifts between EVM versions and compiler optimization passes. Instead, regression gating is fully delegated to `forge snapshot --check`: Foundry records the gas of every test across the entire suite into `.gas-snapshot` and fails CI on any increase. This approach catches regressions across every test, not just the dozen paths manually capped in a single file.
 
 **Measurement strategy:**
-- Warm measurements: one prior call warms up all storage slots before the measured call.
-- Cold measurements: first call on a fresh market (all slots cold).
+- Warm measurements: one prior call warms up all storage slots before the measured call, isolating the steady-state cost.
+- Cold measurements: first call on a fresh market (all slots cold), documenting worst-case first-transaction cost.
 
-**Gas caps (generous upper bounds for CI stability):**
+**Functions logged:**
 
-| Function | Scenario | Gas Cap |
+| Function | Scenario | Label |
 |---|---|---|
-| `buy()` | 2-outcome warm | 150 000 |
-| `buy()` | 2-outcome cold | 250 000 |
-| `buy()` | 7-outcome warm | 250 000 |
-| `sell()` | standard 2-outcome warm | 150 000 |
-| `sell()` | CSS 7-outcome warm | 350 000 |
-| `resolve()` | no trades | 80 000 |
-| `resolve()` | with one trade | 100 000 |
-| `claim()` | winner | 100 000 |
-| `getPrice()` | view | 30 000 |
-| `getAllPrices()` | 7-outcome view | 80 000 |
-| `getBuyCost()` | view | 40 000 |
-| `getMarketStatus()` | view | 30 000 |
+| `buy()` | 2-outcome warm | `buy() 2-outcome warm gas` |
+| `buy()` | 2-outcome cold | `buy() 2-outcome cold gas` |
+| `buy()` | 7-outcome warm | `buy() 7-outcome warm gas` |
+| `sell()` | standard 2-outcome warm | `sell() standard warm gas` |
+| `sell()` | CSS 7-outcome warm | `sell() CSS 7-outcome warm gas` |
+| `resolve()` | no trades | `resolve() no-trades gas` |
+| `resolve()` | with one trade | `resolve() with-trade gas` |
+| `claim()` | winner | `claim() winner gas` |
+| `getPrice()` | view | `getPrice() gas` |
+| `getAllPrices()` | 7-outcome view | `getAllPrices() 7-outcome gas` |
+| `getBuyCost()` | view | `getBuyCost() gas` |
+| `getMarketStatus()` | view | `getMarketStatus() gas` |
 
 **CI integration:**
 ```bash
@@ -435,26 +454,24 @@ These are explicitly out of scope for this test suite (covered elsewhere):
 | `BlieverMarketFactory` deploy/clone logic | Factory not yet developed (development phase) |
 | Resolution Adapter / UMA oracle integration | Not part of `BlieverMarket.sol` |
 | EIP-1967 proxy upgrades | `BlieverMarket` clones are intentionally immutable (no UUPS) |
-| EIP-2612 permit happy path | `MockUSDC` does not implement permit; permit tests require a full ERC-20Permit mock |
+| EIP-2612 permit on the CSS net-cost sell path | The sell permit path is only reachable when a CSS translation produces a net payment (rare). Covered by the same `InsufficientPermitAllowance` logic as `buy()`; a dedicated sell-permit test can be added when CSS-cost scenarios are more common. |
 | Multi-market interactions | Isolation: each test targets one market clone |
 
 ---
 
-## Improvement Opportunities
+## Potential Future Extensions
 
 When the codebase matures, consider adding:
 
-1. **Permit fuzz tests** — Deploy a proper EIP-2612 MockUSDC and fuzz the `v/r/s/deadline` permit flow for both `buy()` and CSS-path `sell()`. Include the "permit front-run → fallback to allowance" path.
+1. **Fork tests against Base mainnet** — Use a real USDC contract and real pool deployment to verify end-to-end gas costs on an actual L2 block.
 
-2. **`InsufficientPermitAllowance` path** — The only uncovered revert in buy/sell. Requires a consumed permit nonce with zero pre-existing allowance.
+2. **Differential test against Python reference** — Implement the LS-LMSR cost function in Python (or use the `ff` library) and compare output against `getBuyCost()` / `getSellEstimate()` for the same input vectors.
 
-3. **Fork tests against Base mainnet** — Use a real USDC contract and real pool deployment to verify the end-to-end gas costs on an actual L2 block.
+3. **Handler expansion for invariant tests** — Add CSS sells, outcome-1 buys, multi-outcome sells, and post-resolution claims to the Handler to increase the reachable state space in `BlieverMarket_Invariant.t.sol`.
 
-4. **Differential test against Python reference** — Implement the LS-LMSR cost function in Python (or use `ff` library) and compare output against `getBuyCost()` / `getSellEstimate()` for the same input vectors.
+4. **`NegativeBuyCost` path** — Currently unreachable in normal operation (would indicate an LSMath bug). A malicious LSMath mock could explicitly exercise the `if (tradeCost18 < 0) revert NegativeBuyCost()` branch.
 
-5. **Handler expansion for invariant tests** — Add CSS sells, outcome-1 buys, multi-outcome sells, and post-resolution claims to the Handler to increase the reachable state space.
-
-6. **`_NegativeBuyCost` path** — Currently unreachable in normal operation (would indicate an LSMath bug). Consider adding a malicious LSMath mock to explicitly cover the `if (tradeCost18 < 0) revert NegativeBuyCost()` branch.
+5. **Permit fuzz on buy path** — Fuzz `deadline`, `value`, and actor ordering to stress-test the permit → fallback-allowance path across a wider range of inputs.
 
 ---
 
