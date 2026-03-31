@@ -1,0 +1,489 @@
+No files changed, compilation skipped
+
+Ran 28 tests for test/BlieverMarket/BlieverMarket_Init.t.sol:BlieverMarket_InitTest
+[PASS] test_init_boundary_maxAlpha() (gas: 471232)
+[PASS] test_init_boundary_maxOutcomeCount() (gas: 4948995)
+[PASS] test_init_boundary_minAlpha() (gas: 470746)
+[PASS] test_init_boundary_minOutcomeCount() (gas: 470736)
+[PASS] test_init_emitsMarketInitialized() (gas: 470542)
+[PASS] test_init_initialQuantities_2outcomes() (gas: 20067)
+[PASS] test_init_initialQuantities_7outcomes() (gas: 42841)
+[PASS] test_init_initialQuantities_matchesLiveAtStart() (gas: 36549)
+[PASS] test_init_prices_symmetric_2outcomes() (gas: 72111)
+[PASS] test_init_revert_alpha_tooHigh() (gas: 157581)
+[PASS] test_init_revert_alpha_tooLow() (gas: 157421)
+[PASS] test_init_revert_doubleInit() (gas: 44907)
+[PASS] test_init_revert_masterImpl_locked() (gas: 41670)
+[PASS] test_init_revert_outcomeCount_101() (gas: 158036)
+[PASS] test_init_revert_outcomeCount_one() (gas: 157881)
+[PASS] test_init_revert_outcomeCount_zero() (gas: 157297)
+[PASS] test_init_revert_resolutionDeadline_beforeTrading() (gas: 157625)
+[PASS] test_init_revert_resolutionDeadline_beforeTrading_earlyValue() (gas: 157728)
+[PASS] test_init_revert_tradingDeadline_atCurrentTime() (gas: 157236)
+[PASS] test_init_revert_tradingDeadline_inPast() (gas: 158455)
+[PASS] test_init_revert_zeroEpsilon() (gas: 157532)
+[PASS] test_init_revert_zeroFactory() (gas: 154713)
+[PASS] test_init_revert_zeroPool() (gas: 154945)
+[PASS] test_init_revert_zeroResolver() (gas: 154914)
+[PASS] test_init_stateVars_correct_2outcomes() (gas: 107024)
+[PASS] test_init_stateVars_correct_7outcomes() (gas: 48988)
+[PASS] test_init_tradingOpenImmediatelyAfterInit() (gas: 21713)
+[PASS] test_init_usdcCachedFromPool() (gas: 12710)
+Suite result: ok. 28 passed; 0 failed; 0 skipped; finished in 6.60ms (4.74ms CPU time)
+
+Ran 12 tests for test/BlieverMarket/BlieverMarket_Gas.t.sol:BlieverMarket_GasTest
+[PASS] test_gas_buy_2outcomes_1share() (gas: 542821)
+[PASS] test_gas_buy_2outcomes_cold() (gas: 361784)
+[PASS] test_gas_buy_7outcomes_1share() (gas: 630508)
+[PASS] test_gas_claim_winner() (gas: 644015)
+[PASS] test_gas_getAllPrices_7outcomes() (gas: 67455)
+[PASS] test_gas_getBuyCost() (gas: 57767)
+[PASS] test_gas_getMarketStatus() (gas: 24348)
+[PASS] test_gas_getPrice() (gas: 40213)
+[PASS] test_gas_resolve_noTrades() (gas: 77190)
+[PASS] test_gas_resolve_withTrade() (gas: 502331)
+[PASS] test_gas_sell_css_7outcomes() (gas: 1487205)
+[PASS] test_gas_sell_standard_2outcomes() (gas: 774623)
+Suite result: ok. 12 passed; 0 failed; 0 skipped; finished in 15.95ms (13.06ms CPU time)
+
+Ran 33 tests for test/BlieverMarket/BlieverMarket_Resolution.t.sol:BlieverMarket_ResolutionTest
+[PASS] test_claim_callsPool_claimWinnings() (gas: 680617)
+[PASS] test_claim_dust_emits_DustForfeited_noPoolCall() (gas: 174009)
+[PASS] test_claim_emits_WinningsClaimed() (gas: 661118)
+[PASS] test_claim_loser_gets_noWinningShares() (gas: 873674)
+[PASS] test_claim_multiple_winners_independentPayouts() (gas: 1137674)
+[PASS] test_claim_notPauseGated() (gas: 700824)
+[PASS] test_claim_revert_alreadyClaimed() (gas: 672241)
+[PASS] test_claim_revert_neverBoughtWinningOutcome() (gas: 108489)
+[PASS] test_claim_revert_noWinningShares() (gas: 514557)
+[PASS] test_claim_revert_notResolved() (gas: 443045)
+[PASS] test_claim_succeeds_winner() (gas: 684255)
+[PASS] test_expire_emits_MarketExpired() (gas: 79502)
+[PASS] test_expire_noClaims_possible() (gas: 516991)
+[PASS] test_expire_notPauseGated() (gas: 134285)
+[PASS] test_expire_revert_alreadyResolved() (gas: 109201)
+[PASS] test_expire_revert_atExactResolutionDeadline() (gas: 45340)
+[PASS] test_expire_revert_deadlineNotPassed() (gas: 45159)
+[PASS] test_expire_revert_notFactory() (gas: 38598)
+[PASS] test_expire_succeeds_setsResolvedTrue() (gas: 131158)
+[PASS] test_expire_winningOutcome_equalsOutcomeCount() (gas: 83633)
+[PASS] test_getMarketStatus_reflectsLifecycle() (gas: 138137)
+[PASS] test_lifecycle_buy_resolve_claim() (gas: 942833)
+[PASS] test_resolve_closesTrading() (gas: 213818)
+[PASS] test_resolve_emits_MarketResolved() (gas: 516475)
+[PASS] test_resolve_notPauseGated() (gas: 132998)
+[PASS] test_resolve_revert_afterResolutionDeadline() (gas: 42974)
+[PASS] test_resolve_revert_alreadyResolved() (gas: 104727)
+[PASS] test_resolve_revert_atExactResolutionDeadline() (gas: 42712)
+[PASS] test_resolve_revert_invalidOutcomeIndex() (gas: 40524)
+[PASS] test_resolve_revert_notResolver() (gas: 38286)
+[PASS] test_resolve_settleMarket_correctPayoutWithTraders() (gas: 521829)
+[PASS] test_resolve_settleMarket_zeroWhenNoTraders() (gas: 78714)
+[PASS] test_resolve_succeeds_setsState() (gas: 131829)
+Suite result: ok. 33 passed; 0 failed; 0 skipped; finished in 22.10ms (18.76ms CPU time)
+
+Ran 36 tests for test/BlieverMarket/BlieverMarket_Admin.t.sol:BlieverMarket_AdminTest
+[PASS] test_getAllPrices_correctLength() (gas: 101977)
+[PASS] test_getAllPrices_matchesGetPrice() (gas: 107048)
+[PASS] test_getAllShares_correctLength() (gas: 48511)
+[PASS] test_getAllShares_matchesGetShares() (gas: 750717)
+[PASS] test_getBuyCost_monotone_increasesWithAmount() (gas: 110433)
+[PASS] test_getBuyCost_positive() (gas: 58613)
+[PASS] test_getCssTranslation_outOfRange_returnsZero() (gas: 12804)
+[PASS] test_getInitialQuantities_immutable() (gas: 448660)
+[PASS] test_getMarketStatus_atInit() (gas: 24855)
+[PASS] test_getMarketStatus_tradingClosed_afterResolve() (gas: 90885)
+[PASS] test_getMarketStatus_volumeIncreasesAfterBuy() (gas: 448526)
+[PASS] test_getPrice_revert_invalidIndex() (gas: 14898)
+[PASS] test_getPrice_uniform_atInit_2outcomes() (gas: 71879)
+[PASS] test_getQuantities_initialEpsilonVector() (gas: 19439)
+[PASS] test_getQuantities_updatesAfterBuy() (gas: 427524)
+[PASS] test_getSellEstimate_cssPath_hasCost() (gas: 67528)
+[PASS] test_getSellEstimate_positive_afterBuy() (gas: 471126)
+[PASS] test_getShares_correct_afterBuy() (gas: 422695)
+[PASS] test_getShares_revert_invalidIndex() (gas: 16138)
+[PASS] test_getShares_zero_beforeTrade() (gas: 15373)
+[PASS] test_getSumOfPrices_greaterThanOne() (gas: 41163)
+[PASS] test_getSumOfPrices_greaterThanOne_afterTrade() (gas: 460430)
+[PASS] test_getTotalTraderShares_correctAfterBuy() (gas: 758669)
+[PASS] test_getTotalTraderShares_excludesEpsilon() (gas: 13553)
+[PASS] test_getTotalTraderShares_revert_invalidIndex() (gas: 14194)
+[PASS] test_hasClaimed_falseBeforeTruAfter() (gas: 662710)
+[PASS] test_pause_blocksAllTradeFunctions() (gas: 628598)
+[PASS] test_pause_byFactory_succeeds() (gas: 197429)
+[PASS] test_pause_revert_notFactory() (gas: 37785)
+[PASS] test_pause_revert_notResolver() (gas: 37939)
+[PASS] test_pausedMarket_claim_succeeds() (gas: 700213)
+[PASS] test_pausedMarket_expire_succeeds() (gas: 133645)
+[PASS] test_pausedMarket_resolve_succeeds() (gas: 132651)
+[PASS] test_unpause_byFactory_resumesTrading() (gas: 444559)
+[PASS] test_unpause_revert_notFactory() (gas: 91070)
+[PASS] test_usdcToken_returnsCachedAddress() (gas: 13162)
+Suite result: ok. 36 passed; 0 failed; 0 skipped; finished in 8.38s (21.35ms CPU time)
+
+Ran 41 tests for test/BlieverMarket/BlieverMarket_Trading.t.sol:BlieverMarket_TradingTest
+[PASS] test_buy_callsPool_collectTradeCost() (gas: 407924)
+[PASS] test_buy_costMatchesQuote() (gas: 461051)
+[PASS] test_buy_emits_Bought() (gas: 420487)
+[PASS] test_buy_multipleBysSameTrader_accumulates() (gas: 513946)
+[PASS] test_buy_otherOutcomePrice_decreasesAfterBuy() (gas: 494574)
+[PASS] test_buy_permit_frontrun_fallsBackToAllowance_succeeds() (gas: 516617)
+[PASS] test_buy_permit_frontrun_revertsInsufficientPermitAllowance() (gas: 405245)
+[PASS] test_buy_priceIncreases_afterBuy() (gas: 494470)
+[PASS] test_buy_revert_afterTradingDeadline() (gas: 152014)
+[PASS] test_buy_revert_atExactTradingDeadline() (gas: 152346)
+[PASS] test_buy_revert_dustShareAmount() (gas: 149318)
+[PASS] test_buy_revert_invalidOutcomeIndex() (gas: 149218)
+[PASS] test_buy_revert_slippageExceeded() (gas: 252128)
+[PASS] test_buy_revert_whenPaused() (gas: 198251)
+[PASS] test_buy_revert_whenResolved() (gas: 213149)
+[PASS] test_buy_succeeds_2outcomes_creditsShares() (gas: 439238)
+[PASS] test_buy_succeeds_7outcomes_allOutcomes() (gas: 2432781)
+[PASS] test_buy_traderUsdcBalanceDecreases() (gas: 374051)
+[PASS] test_buy_updatesQuantityVector_onlyBoughtOutcome() (gas: 396692)
+[PASS] test_buy_updatesTotalTraderShares() (gas: 635295)
+[PASS] test_buy_withPermit_happyPath() (gas: 447915)
+[PASS] test_getBuyCost_zeroAmount_returnsZero() (gas: 11345)
+[PASS] test_getSellEstimate_matchesActualRefund() (gas: 665484)
+[PASS] test_getSellEstimate_zeroAmount_returnsZero() (gas: 14017)
+[PASS] test_sell_all_shares_zeroes_balance() (gas: 573081)
+[PASS] test_sell_callsPool_distributeRefund() (gas: 599803)
+[PASS] test_sell_css_7outcomes_updatesAllOtherOutcomes() (gas: 805619)
+[PASS] test_sell_css_partialHoldings_2outcomes() (gas: 722621)
+[PASS] test_sell_css_zeroHoldings_2outcomes() (gas: 427010)
+[PASS] test_sell_emits_Sold_standardSell() (gas: 567538)
+[PASS] test_sell_getCssTranslation_correctTBar() (gas: 433513)
+[PASS] test_sell_getCssTranslation_partialHoldings() (gas: 423572)
+[PASS] test_sell_revert_afterTradingDeadline() (gas: 452354)
+[PASS] test_sell_revert_dustShareAmount() (gas: 449473)
+[PASS] test_sell_revert_invalidOutcomeIndex() (gas: 44906)
+[PASS] test_sell_revert_minRefundSlippage() (gas: 562634)
+[PASS] test_sell_revert_whenPaused() (gas: 497667)
+[PASS] test_sell_revert_whenResolved() (gas: 533397)
+[PASS] test_sell_roundTrip_refundLessThanCost() (gas: 608052)
+[PASS] test_sell_standard_refund_creditsTrader() (gas: 641680)
+[PASS] test_sell_updatesQuantityVector() (gas: 600636)
+Suite result: ok. 41 passed; 0 failed; 0 skipped; finished in 8.38s (47.40ms CPU time)
+
+Ran 22 tests for test/BlieverMarket/BlieverMarket_Fuzz.t.sol:BlieverMarket_FuzzTest
+[PASS] testFuzz_buy_alwaysReverts_zeroMaxCost(uint256) (runs: 2001, μ: 255589, ~: 255395)
+[PASS] testFuzz_buy_otherOutcomePricesDecrease(uint256) (runs: 2000, μ: 490967, ~: 490667)
+[PASS] testFuzz_buy_priceIncreases(uint256) (runs: 2000, μ: 490816, ~: 490516)
+[PASS] testFuzz_buy_revert_belowMinShare(uint256) (runs: 2000, μ: 149352, ~: 149413)
+[PASS] testFuzz_buy_revert_invalidOutcomeIndex(uint256) (runs: 2000, μ: 149631, ~: 149581)
+[PASS] testFuzz_buy_revert_pastTradingDeadline(uint256) (runs: 2000, μ: 152186, ~: 152286)
+[PASS] testFuzz_buy_succeedsWhenCapGeActualCost(uint256) (runs: 2000, μ: 429498, ~: 429876)
+[PASS] testFuzz_buy_sumOfPricesAlwaysGtOne(uint256) (runs: 2000, μ: 458757, ~: 459044)
+[PASS] testFuzz_cssTranslation_consistent(uint256,uint256) (runs: 2000, μ: 429249, ~: 433990)
+[PASS] testFuzz_expire_revert_beforeDeadline(uint256) (runs: 2000, μ: 45002, ~: 45094)
+[PASS] testFuzz_getBuyCost_monotoneIncreasing(uint256,uint256) (runs: 2000, μ: 114676, ~: 114869)
+[PASS] testFuzz_getBuyCost_positiveForAnyValidAmount(uint256) (runs: 2000, μ: 58012, ~: 58784)
+[PASS] testFuzz_quantity_equals_epsilon_plus_totalTraderShares(uint256) (runs: 2000, μ: 451707, ~: 451518)
+[PASS] testFuzz_resolve_payoutMatchesSettleMarketArg(uint256) (runs: 2000, μ: 525247, ~: 525058)
+[PASS] testFuzz_resolve_revert_pastResolutionDeadline(uint256) (runs: 2001, μ: 43144, ~: 43240)
+[PASS] testFuzz_roundTrip_refundLEcost(uint256) (runs: 2000, μ: 543743, ~: 543553)
+[PASS] testFuzz_sell_css_sharesNeverNegative(uint256) (runs: 2000, μ: 650887, ~: 649365)
+[PASS] testFuzz_sell_quantityNeverBelowEpsilon(uint256) (runs: 2000, μ: 583980, ~: 583684)
+[PASS] testFuzz_sell_revert_belowMinShare(uint256) (runs: 2000, μ: 44400, ~: 44461)
+[PASS] testFuzz_sell_revert_invalidOutcomeIndex(uint256) (runs: 2000, μ: 44504, ~: 44454)
+[PASS] testFuzz_sell_zeroMinRefund_neverReverts(uint256) (runs: 2000, μ: 578365, ~: 578929)
+[PASS] testFuzz_totalTraderShares_equalsSumOfIndividuals(uint256,uint256,uint256) (runs: 2000, μ: 1151295, ~: 1151173)
+Suite result: ok. 22 passed; 0 failed; 0 skipped; finished in 11.39s (52.66s CPU time)
+
+Ran 8 tests for test/BlieverMarket/BlieverMarket_Invariant.t.sol:BlieverMarket_InvariantTest
+[PASS] invariant_I1_quantityNonNegative() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I2_quantityLedgerConsistency() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I3_totalShares_equalsSumOfIndividuals() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I4_sumOfPricesGtOne() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I5_resolvedIsMonotone() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I6_claimedIsMonotone() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I7_marketStatus_consistent() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+[PASS] invariant_I8_initialQuantitiesImmutable() (runs: 500, calls: 50000, reverts: 516)
+
+╭----------------------+-------------+-------+---------+----------╮
+| Contract             | Selector    | Calls | Reverts | Discards |
++=================================================================+
+| BlieverMarketHandler | buy         | 12518 | 516     | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | resolve     | 12610 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | sell        | 12408 | 0       | 0        |
+|----------------------+-------------+-------+---------+----------|
+| BlieverMarketHandler | warpTrading | 12464 | 0       | 0        |
+╰----------------------+-------------+-------+---------+----------╯
+
+Suite result: ok. 8 passed; 0 failed; 0 skipped; finished in 15.12s (66.46s CPU time)
+
+╭----------------------------------------------+-----------------+--------+--------+---------+---------╮
+| src/BlieverMarket.sol:BlieverMarket Contract |                 |        |        |         |         |
++======================================================================================================+
+| Deployment Cost                              | Deployment Size |        |        |         |         |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| 2494765                                      | 11380           |        |        |         |         |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+|                                              |                 |        |        |         |         |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| Function Name                                | Min             | Avg    | Median | Max     | # Calls |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| alpha                                        | 2924            | 2924   | 2924   | 2924    | 4       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| buy                                          | 2792            | 166219 | 218360 | 266236  | 4690    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| claim                                        | 2895            | 67863  | 115145 | 115145  | 19      |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| expireUnresolved                             | 3032            | 8019   | 7310   | 39851   | 266     |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| factory                                      | 2882            | 2882   | 2882   | 2882    | 1       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getAllPrices                                 | 28497           | 42010  | 42010  | 55523   | 4       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getAllShares                                 | 8131            | 12204  | 8131   | 20351   | 3       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getBuyCost                                   | 2437            | 49219  | 48461  | 85633   | 4407    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getCssTranslation                            | 2450            | 4763   | 4780   | 4780    | 260     |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getInitialQuantities                         | 9916            | 9916   | 9916   | 9916    | 4       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getMarketStatus                              | 12750           | 12843  | 12884  | 12884   | 10      |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getPrice                                     | 3002            | 32906  | 28800  | 39634   | 1036    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getQuantities                                | 10219           | 10291  | 10219  | 22929   | 529     |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getSellEstimate                              | 3025            | 42909  | 52794  | 53139   | 5       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getShares                                    | 2555            | 4792   | 4793   | 4793    | 4056    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getSumOfPrices                               | 29196           | 37890  | 38063  | 40007   | 258     |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| getTotalTraderShares                         | 2936            | 5089   | 5092   | 5092    | 1032    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| hasClaimed                                   | 2785            | 2785   | 2785   | 2785    | 9       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| initialize                                   | 3016            | 408181 | 333776 | 4811925 | 560     |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| outcomeCount                                 | 2914            | 2914   | 2914   | 2914    | 4       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| pause                                        | 2751            | 22789  | 26129  | 26129   | 14      |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| pool                                         | 2372            | 2372   | 2372   | 2372    | 2       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| questionId                                   | 2814            | 2814   | 2814   | 2814    | 2       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| resolutionDeadline                           | 2584            | 2584   | 2584   | 2584    | 1       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| resolve                                      | 2850            | 37990  | 39364  | 59264   | 2602    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| resolved                                     | 2502            | 2502   | 2502   | 2502    | 10      |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| resolver                                     | 2271            | 2271   | 2271   | 2271    | 2057    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| sell                                         | 3093            | 100203 | 143895 | 493184  | 1557    |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| tradingDeadline                              | 2980            | 2980   | 2980   | 2980    | 1       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| unpause                                      | 2509            | 5570   | 5570   | 8631    | 2       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| usdc                                         | 2464            | 2464   | 2464   | 2464    | 2       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| usdcToken                                    | 2329            | 2329   | 2329   | 2329    | 2       |
+|----------------------------------------------+-----------------+--------+--------+---------+---------|
+| winningOutcome                               | 2760            | 2760   | 2760   | 2760    | 3       |
+╰----------------------------------------------+-----------------+--------+--------+---------+---------╯
+
+╭--------------------------------------------------------------+-----------------+-------+--------+-------+---------╮
+| test/BlieverMarket/BlieverMarketBase.t.sol:MockPool Contract |                 |       |        |       |         |
++===================================================================================================================+
+| Deployment Cost                                              | Deployment Size |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| 404543                                                       | 1803            |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+|                                                              |                 |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| Function Name                                                | Min             | Avg   | Median | Max   | # Calls |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| asset                                                        | 279             | 279   | 279    | 279   | 545     |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| claimCalls                                                   | 2415            | 2415  | 2415   | 2415  | 2       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| collectCalls                                                 | 2484            | 2484  | 2484   | 2484  | 1       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastClaimAmount                                              | 2616            | 2616  | 2616   | 2616  | 1       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastCost                                                     | 2253            | 2253  | 2253   | 2253  | 3       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastRefund                                                   | 2437            | 2437  | 2437   | 2437  | 1       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastSettledPayout                                            | 2393            | 2393  | 2393   | 2393  | 259     |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastTrader                                                   | 2329            | 2329  | 2329   | 2329  | 2       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| lastWinner                                                   | 2679            | 2679  | 2679   | 2679  | 1       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| refundCalls                                                  | 2371            | 2371  | 2371   | 2371  | 2       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| resetCounters                                                | 28358           | 29292 | 28767  | 30358 | 9       |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| seed                                                         | 71044           | 71060 | 71060  | 71077 | 360     |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| settleCalls                                                  | 2528            | 2528  | 2528   | 2528  | 2       |
+╰--------------------------------------------------------------+-----------------+-------+--------+-------+---------╯
+
+╭--------------------------------------------------------------+-----------------+-------+--------+-------+---------╮
+| test/BlieverMarket/BlieverMarketBase.t.sol:MockUSDC Contract |                 |       |        |       |         |
++===================================================================================================================+
+| Deployment Cost                                              | Deployment Size |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| 519078                                                       | 2157            |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+|                                                              |                 |       |        |       |         |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| Function Name                                                | Min             | Avg   | Median | Max   | # Calls |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| approve                                                      | 29149           | 45353 | 46249  | 46249 | 4943    |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| balanceOf                                                    | 2530            | 2530  | 2530   | 2530  | 783     |
+|--------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| mint                                                         | 33916           | 50114 | 51028  | 51028 | 4947    |
+╰--------------------------------------------------------------+-----------------+-------+--------+-------+---------╯
+
+╭--------------------------------------------------------------------+-----------------+-------+--------+-------+---------╮
+| test/BlieverMarket/BlieverMarketBase.t.sol:MockUSDCPermit Contract |                 |       |        |       |         |
++=========================================================================================================================+
+| Deployment Cost                                                    | Deployment Size |       |        |       |         |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| 825669                                                             | 5056            |       |        |       |         |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+|                                                                    |                 |       |        |       |         |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| Function Name                                                      | Min             | Avg   | Median | Max   | # Calls |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| DOMAIN_SEPARATOR                                                   | 374             | 374   | 374    | 374   | 3       |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| allowance                                                          | 2856            | 2856  | 2856   | 2856  | 3       |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| approve                                                            | 24032           | 26624 | 26624  | 29216 | 2       |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| mint                                                               | 50983           | 50983 | 50983  | 50983 | 3       |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| nonces                                                             | 2582            | 2582  | 2582   | 2582  | 5       |
+|--------------------------------------------------------------------+-----------------+-------+--------+-------+---------|
+| permit                                                             | 74221           | 74221 | 74221  | 74221 | 2       |
+╰--------------------------------------------------------------------+-----------------+-------+--------+-------+---------╯
+
+╭--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------╮
+| test/BlieverMarket/BlieverMarket_Invariant.t.sol:BlieverMarketHandler Contract |                 |      |        |        |         |
++=====================================================================================================================================+
+| Deployment Cost                                                                | Deployment Size |      |        |        |         |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| 1739643                                                                        | 7636            |      |        |        |         |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+|                                                                                |                 |      |        |        |         |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| Function Name                                                                  | Min             | Avg  | Median | Max    | # Calls |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| buy                                                                            | 2748            | 2748 | 2748   | 2748   | 49728   |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| ghost_resolved                                                                 | 2265            | 2265 | 2265   | 2265   | 1       |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| resolve                                                                        | 2354            | 6448 | 2354   | 105763 | 51928   |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| sell                                                                           | 2767            | 3338 | 2767   | 17464  | 50624   |
+|--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------|
+| warpTrading                                                                    | 3447            | 3591 | 3675   | 3675   | 51296   |
+╰--------------------------------------------------------------------------------+-----------------+------+--------+--------+---------╯
+
+
+Ran 7 test suites in 16.19s (43.31s CPU time): 180 tests passed, 0 failed, 0 skipped (180 total tests)
