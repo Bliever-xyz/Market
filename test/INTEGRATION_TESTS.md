@@ -287,6 +287,53 @@ seed = "0xBELIEVER"
 
 ---
 
+## Common Testing Gotchas
+
+### 1. `vm.expectRevert` with parametric custom errors
+
+`vm.expectRevert(bytes4 selector)` checks for an **exact** bytes match. When the custom error
+carries ABI-encoded parameters, the actual revert payload is larger than 4 bytes and the match fails.
+
+| Error signature | Revert payload size | How to match |
+|---|---|---|
+| `error Foo()` | 4 bytes | `vm.expectRevert(Foo.selector)` ✓ |
+| `error MarketHasTrades(address)` | 36 bytes (4 + 32) | `vm.expectRevert(abi.encodeWithSelector(MarketHasTrades.selector, addr))` ✓ |
+| `error CapacityExceeded(uint256, uint256)` | 68 bytes (4 + 32 + 32) | `vm.expectRevert(abi.encodeWithSelector(..., a, b))` ✓ |
+
+**Rule of thumb:** always use `abi.encodeWithSelector(Error.selector, ...args)` for any error that
+carries at least one parameter. Reserve the bare `bytes4` form only for no-argument errors.
+
+### 2. `vm.prank` consumed by external calls inside argument expressions
+
+`vm.prank(addr)` redirects `msg.sender` for the **next external call**. Solidity evaluates all
+function arguments **before** executing the outer call. An external call nested inside an argument
+expression silently consumes the prank:
+
+```solidity
+// ❌ BROKEN — underPool.totalAssets() consumes the prank; registerMarket is
+//    called by the test contract (no MARKET_MANAGER_ROLE) → AccessControl revert.
+vm.prank(admin);
+vm.expectRevert(abi.encodeWithSelector(
+    BlieverV1Pool.CapacityExceeded.selector,
+    MAX_RISK,
+    underPool.totalAssets() * (10_000 - RESERVE_BPS) / 10_000   // ← consumes prank
+));
+underPool.registerMarket(address(m), 2);
+
+// ✅ CORRECT — hoist the external call before vm.prank.
+uint256 activeCap = underPool.totalAssets() * (10_000 - RESERVE_BPS) / 10_000;
+vm.prank(admin);
+vm.expectRevert(abi.encodeWithSelector(
+    BlieverV1Pool.CapacityExceeded.selector, MAX_RISK, activeCap
+));
+underPool.registerMarket(address(m), 2);
+```
+
+**Rule of thumb:** never place an external call (any call to a contract address) inside the argument
+list of a `vm.prank`-ed transaction. Hoist all auxiliary reads into local variables first.
+
+---
+
 ## Extending the Suite
 
 ### Adding a New Lifecycle Test
