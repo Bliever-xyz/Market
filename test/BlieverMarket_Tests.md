@@ -474,21 +474,3 @@ When the codebase matures, consider adding:
 5. **Permit fuzz on buy path** — Fuzz `deadline`, `value`, and actor ordering to stress-test the permit → fallback-allowance path across a wider range of inputs.
 
 ---
-
-## foundry.toml Reference Configuration
-
-Add to your project's `foundry.toml` for these tests:
-
-```toml
-[profile.default]
-evm_version = "cancun"   # required: EIP-1153 transient storage
-
-[fuzz]
-runs  = 2000
-seed  = "0xBELIEVER"
-
-[invariant]
-runs            = 500
-depth           = 100
-fail_on_revert  = false   # handler try-catches handle expected reverts
-```
